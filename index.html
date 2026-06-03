@@ -1,0 +1,2770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrix Terminal</title>
+<style>
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;background:#000;overflow:hidden;font-family:'Courier New',Courier,monospace;}
+
+  #root{display:flex;flex-direction:column;width:100vw;height:100vh;}
+
+  /* ── Stage: everything floats here over rain ── */
+  #stage{flex:1;position:relative;overflow:hidden;}
+
+  /* Rain always fills stage as background */
+  #rain-canvas{position:absolute;inset:0;width:100%;height:100%;z-index:0;}
+  #rain-badge{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font:10px/1 'Courier New',monospace;color:var(--col);opacity:.2;white-space:nowrap;z-index:1;pointer-events:none;}
+
+  /* ── Panel slots ── */
+  /* In FOCUS mode: one panel fills stage */
+  /* In SPLIT mode: two panels side by side */
+  #panel-left, #panel-right {
+    position:absolute; top:0; bottom:0;
+    z-index:10; display:none;
+    flex-direction:column;
+    background:#0d0d0d;
+    overflow:hidden;
+    transition: width .25s ease, left .25s ease;
+  }
+  #panel-left  { left:0;  border-right:1px solid var(--col); }
+  #panel-right { right:0; border-left:1px solid var(--col);  }
+
+  /* FOCUS: one panel full width */
+  #panel-left.focus  { display:flex; width:100%; border-right:none; }
+  #panel-right.focus { display:flex; width:100%; border-left:none;  }
+
+  /* SPLIT: both panels 50% */
+  #panel-left.split  { display:flex; width:50%; }
+  #panel-right.split { display:flex; width:50%; right:0; }
+
+  /* drag handle between split panels */
+  #split-drag {
+    position:absolute; top:0; bottom:0; z-index:20;
+    width:6px; cursor:ew-resize; display:none;
+    background:transparent;
+    border-left:1px solid rgba(0,255,65,.25);
+    transition:border-color .15s;
+  }
+  #split-drag:hover{border-color:var(--col);background:rgba(0,255,65,.05);}
+  #split-drag.visible{display:block;}
+
+  /* ── Panel internals ── */
+  .panel-header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:5px 10px;background:rgba(0,0,0,0.5);
+    border-bottom:1px solid rgba(0,255,65,.18);
+    font:11px/1 'Courier New',monospace;color:var(--col);
+    flex-shrink:0;min-height:26px;user-select:none;
+  }
+  .panel-title{opacity:.65;letter-spacing:.05em;text-transform:uppercase;}
+  .panel-hint{opacity:.25;font-size:10px;}
+  .panel-close-x{cursor:pointer;opacity:.35;font-size:12px;padding:1px 5px;border:1px solid transparent;border-radius:2px;transition:opacity .12s,color .12s;}
+  .panel-close-x:hover{opacity:1;color:#ff4444;border-color:#ff4444;}
+  .panel-body{flex:1;overflow:hidden;display:flex;flex-direction:column;position:relative;}
+
+  /* ── Rain panel (when brought to split slot) ── */
+  #rain-panel-inner{flex:1;position:relative;overflow:hidden;}
+  #rain-panel-canvas{position:absolute;inset:0;width:100%;height:100%;}
+
+  /* ── Editor ── */
+  #tab-bar{display:flex;align-items:center;background:rgba(0,0,0,0.4);border-bottom:1px solid rgba(0,255,65,.12);overflow-x:auto;flex-shrink:0;min-height:27px;}
+  #tab-bar::-webkit-scrollbar{height:2px;}
+  #tab-bar::-webkit-scrollbar-thumb{background:var(--col);}
+  .tab{display:flex;align-items:center;gap:5px;padding:4px 10px;font:11px/1 'Courier New',monospace;color:var(--col);opacity:.5;cursor:pointer;border-right:1px solid rgba(0,255,65,.1);white-space:nowrap;flex-shrink:0;transition:opacity .12s;}
+  .tab:hover{opacity:.8;}.tab.active{opacity:1;background:rgba(0,255,65,.07);}
+  .tab .tx{font-size:10px;opacity:.35;cursor:pointer;padding:0 2px;}.tab .tx:hover{opacity:1;color:#ff4444;}
+  .tab .td{width:5px;height:5px;border-radius:50%;background:#ffcc00;display:none;}.tab.unsaved .td{display:inline-block;}
+  #new-tab-btn{padding:4px 10px;font:13px/1 'Courier New',monospace;color:var(--col);opacity:.35;cursor:pointer;flex-shrink:0;}#new-tab-btn:hover{opacity:1;}
+  #editor-wrap{flex:1;display:flex;overflow:hidden;}
+  #line-numbers{width:38px;flex-shrink:0;padding:10px 4px 10px 0;text-align:right;font:12px/1.6 'Courier New',monospace;color:var(--col);opacity:.25;user-select:none;overflow:hidden;background:rgba(0,0,0,.2);border-right:1px solid rgba(0,255,65,.07);}
+  #editor-ta{flex:1;background:transparent;border:none;outline:none;color:var(--col);font:12px/1.6 'Courier New',monospace;padding:10px 12px;resize:none;caret-color:var(--col);overflow-y:auto;}
+  #editor-ta::selection{background:rgba(0,255,65,.18);}
+  #editor-ta::-webkit-scrollbar{width:3px;}#editor-ta::-webkit-scrollbar-thumb{background:var(--col);}
+  #editor-status{display:flex;justify-content:space-between;padding:3px 10px;font:10px/1 'Courier New',monospace;color:var(--col);opacity:.35;border-top:1px solid rgba(0,255,65,.08);flex-shrink:0;}
+  #save-flash{position:absolute;top:30px;right:8px;font:10px/1 'Courier New',monospace;color:#00ccff;opacity:0;transition:opacity .3s;pointer-events:none;}
+  #save-flash.show{opacity:1;}
+
+  /* ── Dictionary panels ── */
+  .dict-wrap{display:flex;flex-direction:column;height:100%;overflow:hidden;}
+  .dict-search-bar{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 12px;
+    border-bottom:1px solid rgba(0,255,65,.2);
+    flex-shrink:0;background:rgba(0,0,0,.4);
+  }
+  .dict-search-bar input{
+    flex:1;background:transparent;border:none;outline:none;
+    border-bottom:1px solid var(--col);
+    color:var(--col);font:13px/1 'Courier New',monospace;
+    padding:4px 6px;caret-color:var(--col);
+  }
+  .dict-search-bar input::placeholder{opacity:.3;}
+  .dict-search-btn{
+    background:transparent;border:1px solid var(--col);color:var(--col);
+    font:11px/1 'Courier New',monospace;padding:4px 12px;cursor:pointer;
+    border-radius:3px;opacity:.7;transition:background .12s;flex-shrink:0;
+  }
+  .dict-search-btn:hover{background:rgba(0,255,65,.15);opacity:1;}
+  .dict-results{
+    flex:1;overflow-y:auto;padding:10px 14px;
+    font:12px/1.7 'Courier New',monospace;color:var(--col);
+  }
+  .dict-results::-webkit-scrollbar{width:3px;}
+  .dict-results::-webkit-scrollbar-thumb{background:var(--col);}
+  .dict-word{font-size:18px;font-weight:bold;color:var(--col);margin-bottom:2px;}
+  .dict-phonetic{opacity:.5;font-size:11px;margin-bottom:8px;}
+  .dict-pos{color:#00ccff;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin:10px 0 4px;border-bottom:1px solid rgba(0,255,65,.15);padding-bottom:3px;}
+  .dict-def{margin:4px 0 2px;opacity:.85;}
+  .dict-example{opacity:.4;font-style:italic;margin-left:12px;font-size:11px;}
+  .dict-synonyms{opacity:.45;font-size:11px;margin-top:4px;}
+  .dict-separator{border:none;border-top:1px solid rgba(0,255,65,.12);margin:14px 0;}
+  .dict-empty{opacity:.35;padding:20px 0;}
+  .dict-loading{opacity:.4;animation:pulse 1s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:.8}}
+  /* JP specific */
+  .jp-word{font-size:22px;font-weight:bold;color:var(--col);margin-bottom:2px;}
+  .jp-reading{font-size:13px;color:#00ccff;margin-bottom:2px;}
+  .jp-romaji{font-size:11px;opacity:.45;margin-bottom:6px;}
+  .jp-tags{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0;}
+  .jp-tag{font-size:10px;border:1px solid rgba(0,255,65,.35);padding:1px 6px;border-radius:2px;opacity:.6;}
+  .jp-tag.jlpt{border-color:#00ccff;color:#00ccff;opacity:.8;}
+  .jp-sense{margin:6px 0 2px;opacity:.85;}
+  .jp-sense-pos{color:#00ccff;font-size:10px;opacity:.55;text-transform:uppercase;letter-spacing:.06em;}
+
+  /* ── Atom canvas ── */
+  .atom-wrap{flex:1;position:relative;overflow:hidden;}
+  .atom-cvs{position:absolute;inset:0;width:100%;height:100%;}
+  .atom-lbl{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font:10px/1 'Courier New',monospace;color:var(--col);opacity:.35;white-space:nowrap;pointer-events:none;}
+
+  /* ── Control bar ── */
+  #ctrl-bar{display:flex;align-items:center;gap:4px;padding:4px 12px;background:rgba(0,0,0,.75);border-top:1px solid var(--col);border-bottom:1px solid rgba(0,255,65,.1);flex-shrink:0;min-height:28px;}
+  .cl{font:10px/1 'Courier New',monospace;color:var(--col);opacity:.28;letter-spacing:.08em;text-transform:uppercase;flex-shrink:0;margin-right:2px;}
+  .cd{width:1px;height:14px;background:var(--col);opacity:.12;margin:0 4px;flex-shrink:0;}
+  .cs{flex:1;}
+  #ctrl-badge{font:10px/1 'Courier New',monospace;color:var(--col);opacity:.2;white-space:nowrap;}
+  .tc{background:transparent;border:1px solid rgba(0,255,65,.22);color:var(--col);font:10px/1 'Courier New',monospace;padding:3px 9px;cursor:pointer;border-radius:3px;opacity:.55;transition:background .12s,opacity .12s;flex-shrink:0;}
+  .tc:hover{background:rgba(0,255,65,.1);opacity:1;}.tc.on{background:rgba(0,255,65,.18);opacity:1;border-color:var(--col);}
+
+  /* ── Terminal ── */
+  #terminal{background:#0d0d0d;display:flex;flex-direction:column;height:290px;min-height:90px;flex-shrink:0;position:relative;}
+  #term-drag-handle{
+    height:6px;
+    background:transparent;
+    border-top:2px solid rgba(0,255,65,0.3);
+    cursor:ns-resize;
+    flex-shrink:0;
+    transition:border-color .15s, background .15s;
+  }
+  #term-drag-handle:hover{
+    background:rgba(0,255,65,0.06);
+    border-top-color:var(--col);
+  }
+  #term-inner{cursor:default;display:flex;flex-direction:column;height:100%;}
+  #output{flex:1;overflow-y:auto;padding:8px 16px 4px;font-size:13px;line-height:1.65;color:var(--col);scroll-behavior:smooth;}
+  #output::-webkit-scrollbar{width:3px;}#output::-webkit-scrollbar-thumb{background:var(--col);border-radius:2px;}
+  .lu{color:#fff;opacity:.65;}.li{color:#00ccff;}.lo{color:var(--col);}.le{color:#ff4444;}.ld{color:var(--col);opacity:.38;}.lv{color:var(--col);font-weight:bold;}.lh{color:#00ccff;}
+  #input-row{display:flex;align-items:center;padding:6px 16px 8px;border-top:1px solid rgba(0,255,65,.1);gap:6px;flex-shrink:0;}
+  #prompt{color:var(--col);font-size:13px;white-space:nowrap;user-select:none;flex-shrink:0;}
+  #cmd{flex:1;background:transparent;border:none;outline:none;color:var(--col);font:13px/1 'Courier New',monospace;caret-color:var(--col);padding-left:6px;}
+  #cmd::placeholder{opacity:.28;}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  #cursor{display:inline-block;width:7px;height:13px;background:var(--col);vertical-align:middle;margin-left:1px;animation:blink 1s step-end infinite;}
+
+  /* panels list popup */
+  #panels-popup{position:absolute;bottom:32px;right:12px;background:#0d0d0d;border:1px solid var(--col);padding:8px 12px;font:11px/1.8 'Courier New',monospace;color:var(--col);z-index:100;display:none;min-width:180px;}
+  #panels-popup.show{display:block;}
+  #panels-popup .pp-item{cursor:pointer;opacity:.7;padding:2px 0;}
+  #panels-popup .pp-item:hover{opacity:1;}
+  #panels-popup .pp-title{opacity:.35;font-size:10px;letter-spacing:.08em;margin-bottom:4px;}
+
+</style>
+</head>
+<body>
+<div id="root">
+  <!-- Stage -->
+  <div id="stage">
+    <canvas id="rain-canvas"></canvas>
+    <div id="rain-badge">Matrix Terminal · Electron Edition</div>
+
+    <!-- Left panel slot -->
+    <div id="panel-left">
+      <div class="panel-header">
+        <span class="panel-title" id="left-title">—</span>
+        <span class="panel-hint" id="left-hint"></span>
+      </div>
+      <div class="panel-body" id="left-body"></div>
+    </div>
+
+    <!-- Drag handle -->
+    <div id="split-drag"></div>
+
+    <!-- Right panel slot -->
+    <div id="panel-right">
+      <div class="panel-header">
+        <span class="panel-title" id="right-title">—</span>
+        <span class="panel-hint" id="right-hint"></span>
+      </div>
+      <div class="panel-body" id="right-body"></div>
+    </div>
+  </div>
+
+  <!-- Control bar -->
+  <div id="ctrl-bar">
+    <span class="cl">Controls</span>
+    <div class="cd"></div>
+    <button class="tc on"  id="btn-rain"   onclick="toggleRain()">Rain</button>
+    <button class="tc"     id="btn-fast"   onclick="toggleSpeed()">Fast</button>
+    <button class="tc"     id="btn-color"  onclick="cycleColor()">Green</button>
+    <div class="cd"></div>
+    <button class="tc"     id="btn-split"  onclick="cmdSplit()">Split</button>
+    <button class="tc"     id="btn-flip"   onclick="cmdFlip()">Flip</button>
+    <button class="tc"     id="btn-panels" onclick="togglePanelsPopup()">Panels</button>
+    <div class="cd"></div>
+    <button class="tc"     onclick="clearOut()">Clear</button>
+    <div class="cd"></div>
+    <button class="tc"     onclick="adjustZoom(-0.1)" title="Zoom out (Ctrl+-)">A−</button>
+    <button class="tc"     id="btn-zoom" onclick="resetZoom()" title="Reset zoom (Ctrl+0)">100%</button>
+    <button class="tc"     onclick="adjustZoom(0.1)"  title="Zoom in (Ctrl+=)">A+</button>
+    <div class="cs"></div>
+    <span id="ctrl-badge">Matrix Terminal · Electron</span>
+  </div>
+
+  <!-- Terminal -->
+  <div id="terminal">
+    <div id="term-drag-handle"></div>
+    <div id="term-inner">
+      <div id="output"></div>
+      <div id="input-row">
+        <span id="prompt">neo@matrix:~$</span>
+        <input id="cmd" type="text" autocomplete="off" spellcheck="false" placeholder="type 'help'…"/>
+        <span id="cursor"></span>
+      </div>
+    </div>
+    <!-- panels popup anchored to ctrl-bar area -->
+    <div id="panels-popup">
+      <div class="pp-title">OPEN PANELS</div>
+      <div id="pp-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════
+   LOOP TRACKER — manual registration of named loops
+═══════════════════════ */
+const _activeLoops = {};
+function trackLoop(name, id){ _activeLoops[name]=id; }
+function untrackLoop(name){ delete _activeLoops[name]; }
+function loopCount(){ return Object.keys(_activeLoops).length; }
+function loopList(){ return Object.keys(_activeLoops); }
+
+/* ═══════════════════════
+   THEME
+═══════════════════════ */
+const COLORS=['#00ff41','#00ccff','#ff3355','#ffcc00','#bf5fff'];
+const CNAMES=['Green','Cyan','Red','Amber','Purple'];
+let colorIdx=0,rainOn=true,fast=false;
+function setColor(i){colorIdx=i;document.documentElement.style.setProperty('--col',COLORS[i]);document.getElementById('btn-color').textContent=CNAMES[i];}
+setColor(0);
+
+/* ═══════════════════════
+   BACKGROUND RAIN
+═══════════════════════ */
+const bgCanvas=document.getElementById('rain-canvas');
+const bgCtx=bgCanvas.getContext('2d');
+let BW,BH,bcols,bdrops;
+const CHARS='アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&';
+function initBgRain(){
+  BW=bgCanvas.width=document.getElementById('stage').clientWidth||window.innerWidth;
+  BH=bgCanvas.height=document.getElementById('stage').clientHeight||window.innerHeight;
+  bcols=Math.floor(BW/14);
+  bdrops=Array.from({length:bcols},()=>Math.random()*-(BH/14));
+}
+function drawBgRain(){
+  const col=COLORS[colorIdx];
+  bgCtx.fillStyle='rgba(0,0,0,0.05)';bgCtx.fillRect(0,0,BW,BH);
+  bgCtx.font='14px monospace';
+  for(let i=0;i<bcols;i++){
+    const x=i*14,y=bdrops[i]*14;
+    bgCtx.fillStyle='#e0ffe8';bgCtx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)],x,y);
+    if(y>14){bgCtx.fillStyle=col;bgCtx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)],x,y-14);}
+    if(y>28){bgCtx.fillStyle=col+'88';bgCtx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)],x,y-28);}
+    if(y*14>BH&&Math.random()>0.975)bdrops[i]=0;
+    // hard cap to prevent float drift causing lag over time
+    if(bdrops[i]>BH/14+5)bdrops[i]=0;
+    bdrops[i]+=fast?1.6:0.85;
+  }
+}
+let lastT=0;
+function bgLoop(t){
+  const id=requestAnimationFrame(bgLoop);
+  trackLoop('bgRain',id);
+  if(t-lastT<(fast?35:65))return;lastT=t;if(rainOn)drawBgRain();
+}
+initBgRain();window.addEventListener('resize',()=>initBgRain());requestAnimationFrame(bgLoop);
+function toggleRain(){rainOn=!rainOn;document.getElementById('btn-rain').classList.toggle('on',rainOn);if(!rainOn){bgCtx.fillStyle='rgba(0,0,0,0.8)';bgCtx.fillRect(0,0,BW,BH);}}
+function toggleSpeed(){fast=!fast;document.getElementById('btn-fast').classList.toggle('on',fast);}
+function cycleColor(){setColor((colorIdx+1)%COLORS.length);}
+
+/* ═══════════════════════
+   TERMINAL RESIZE
+═══════════════════════ */
+const termEl=document.getElementById('terminal');
+const termDragHandle=document.getElementById('term-drag-handle');
+let tRes=false,tY0,tH0;
+termDragHandle.addEventListener('mousedown',e=>{
+  tRes=true; tY0=e.clientY; tH0=termEl.offsetHeight;
+  e.preventDefault();
+});
+window.addEventListener('mousemove',e=>{
+  if(!tRes)return;
+  const newH=Math.max(90,Math.min(tH0+(tY0-e.clientY),window.innerHeight-100));
+  termEl.style.height=newH+'px';
+});
+window.addEventListener('mouseup',()=>tRes=false);
+
+/* ═══════════════════════
+   PANEL STATE
+   mode: 'none' | 'focus' | 'split'
+   slots: left, right — each holds a panel name or 'rain' or null
+═══════════════════════ */
+// panel system declarations moved above
+
+/* ═══════════════════════════════════════
+   PANEL SYSTEM — Two slots, each with a tab stack
+   slotLeft / slotRight = name of ACTIVE panel in each slot
+   slotLeftTabs / slotRightTabs = ordered list of panel names in each slot
+═══════════════════════════════════════ */
+
+let mode      = 'none';   // 'none' | 'focus' | 'split'
+let slotLeft  = null;
+let slotRight = null;
+let slotLeftTabs  = [];   // all panels in left slot (active is slotLeft)
+let slotRightTabs = [];   // all panels in right slot (active is slotRight)
+let lastAddedSide = null; // tracks alternation for atom stacking
+
+// registered panels: name -> { title, hint, buildFn, destroyFn, animId? }
+const panelRegistry = {};
+
+function registerPanel(name, title, hint, buildFn, destroyFn){
+  panelRegistry[name] = { title, hint, buildFn, destroyFn: destroyFn||null, animId: null };
+}
+
+/* ── Slot tab bar rendering ── */
+function renderSlotTabBar(side){
+  const tabs  = side==='left' ? slotLeftTabs  : slotRightTabs;
+  const active= side==='left' ? slotLeft      : slotRight;
+  const slotEl= document.getElementById('panel-'+side);
+  if(!slotEl) return;
+
+  // find or create tab bar — insert after panel-header
+  let tabBar = slotEl.querySelector('.slot-tab-bar');
+  if(!tabBar){
+    tabBar = document.createElement('div');
+    tabBar.className = 'slot-tab-bar';
+    const hdr = slotEl.querySelector('.panel-header');
+    if(hdr) hdr.after(tabBar);
+    else slotEl.prepend(tabBar);
+  }
+  tabBar.innerHTML = '';
+
+  // always show tab bar so user knows what's in the slot
+  // hide only if single tab AND it's rain
+  if(tabs.length <= 1 && (tabs[0]==='rain'||!tabs.length)){
+    tabBar.style.display='none'; return;
+  }
+  tabBar.style.display = 'flex';
+
+  tabs.forEach(name=>{
+    const reg   = panelRegistry[name];
+    // clean readable label
+    let label = name.replace('atom_','').toUpperCase();
+    if(name==='editor')    label='EDITOR';
+    if(name==='dict')      label='EN DICT';
+    if(name==='jisho')     label='JP DICT';
+    if(name==='sysinfo')   label='SYSINFO';
+    if(name==='perf')      label='PERF';
+    if(name==='rain')      label='RAIN';
+
+    const tab = document.createElement('div');
+    tab.className = 'slot-tab' + (name===active ? ' active' : '');
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className='slot-tab-name';
+    nameSpan.textContent=label;
+    nameSpan.addEventListener('click', ()=>switchSlotTab(side, name));
+
+    const xSpan = document.createElement('span');
+    xSpan.className='slot-tab-x';
+    xSpan.textContent='✕';
+    xSpan.addEventListener('click', (e)=>{ e.stopPropagation(); closeSlotTab(side, name); });
+
+    tab.appendChild(nameSpan);
+    tab.appendChild(xSpan);
+    tabBar.appendChild(tab);
+  });
+}
+
+/* ── Switch active tab in a slot ── */
+function switchSlotTab(side, name){
+  if(side==='left')  slotLeft  = name;
+  else               slotRight = name;
+  const slotEl = document.getElementById('panel-'+side);
+  rebuildSlotContent(side, slotEl);
+  renderSlotTabBar(side);
+}
+
+/* ── Close a specific tab in a slot ── */
+function closeSlotTab(side, name){
+  const tabs = side==='left' ? slotLeftTabs : slotRightTabs;
+  const idx  = tabs.indexOf(name);
+  if(idx === -1) return;
+
+  // destroy panel
+  const reg = panelRegistry[name];
+  if(reg){ if(reg.animId) cancelAnimationFrame(reg.animId); if(reg.destroyFn) reg.destroyFn(reg); delete panelRegistry[name]; }
+
+  tabs.splice(idx, 1);
+  if(side==='left')  slotLeftTabs  = tabs;
+  else               slotRightTabs = tabs;
+
+  if(tabs.length === 0){
+    // slot empty
+    if(side==='left')  slotLeft  = null;
+    else               slotRight = null;
+    // if both empty → none, if one remains → focus
+    if(!slotLeft && !slotRight){ mode='none'; applyLayout(); }
+    else {
+      if(!slotLeft && slotRight){ slotLeft=slotRight; slotLeftTabs=slotRightTabs; slotRight=null; slotRightTabs=[]; mode='focus'; }
+      applyLayout();
+    }
+  } else {
+    // switch to adjacent tab
+    const newActive = tabs[Math.max(0, idx-1)];
+    if(side==='left')  slotLeft  = newActive;
+    else               slotRight = newActive;
+    const slotEl = document.getElementById('panel-'+side);
+    rebuildSlotContent(side, slotEl);
+    renderSlotTabBar(side);
+  }
+  updatePanelsPopup();
+  document.getElementById('btn-split').classList.toggle('on', mode==='split');
+}
+
+/* ── Stop slot anim ── */
+const slotAnims = { left: null, right: null };
+function stopSlotAnim(side){
+  if(slotAnims[side]){ cancelAnimationFrame(slotAnims[side]); slotAnims[side]=null; }
+  const el = document.getElementById('panel-'+side);
+  if(el && el._slotReg && el._slotReg.animId){
+    cancelAnimationFrame(el._slotReg.animId);
+    el._slotReg.animId = null;
+    el._slotReg = null;
+  }
+}
+
+/* ── Apply layout (focus or split) ── */
+function applyLayout(){
+  const pL   = document.getElementById('panel-left');
+  const pR   = document.getElementById('panel-right');
+  const drag = document.getElementById('split-drag');
+
+  pL.className = ''; pR.className = '';
+  drag.classList.remove('visible');
+
+  if(mode==='none'){
+    stopSlotAnim('left'); stopSlotAnim('right');
+    pL.style.display='none'; pR.style.display='none';
+    return;
+  }
+  if(mode==='focus'){
+    stopSlotAnim('right');
+    pL.className='panel-left focus';
+    pR.style.display='none';
+    updateSlot('left', pL);
+    renderSlotTabBar('left');
+    return;
+  }
+  if(mode==='split'){
+    pL.className='panel-left split';
+    pR.className='panel-right split';
+    drag.classList.add('visible');
+    drag.style.left='calc(50% - 3px)';
+    updateSlot('left', pL);
+    renderSlotTabBar('left');
+    updateSlot('right', pR);
+    renderSlotTabBar('right');
+  }
+}
+
+/* ── Rebuild slot content (tab switch, no full DOM wipe of other slot) ── */
+function rebuildSlotContent(side, el){
+  const name   = side==='left' ? slotLeft : slotRight;
+  const hdrEl  = el.querySelector('.panel-header');
+  const titleEl= el.querySelector('.panel-title');
+  const hintEl = el.querySelector('.panel-hint');
+  const body   = el.querySelector('.panel-body');
+  stopSlotAnim(side);
+  body.innerHTML = '';
+  el.dataset.current = name||'';
+  if(!name){ el.style.display='none'; return; }
+  el.style.display='flex';
+  if(name==='rain'){
+    if(hdrEl) hdrEl.style.display='none';
+    const wrap=document.createElement('div'); wrap.style.cssText='flex:1;position:relative;overflow:hidden;';
+    const cv=document.createElement('canvas'); cv.style.cssText='position:absolute;inset:0;width:100%;height:100%;';
+    wrap.appendChild(cv); body.appendChild(wrap);
+    startMiniRain(cv,{animId:null});
+    return;
+  }
+  if(hdrEl) hdrEl.style.display='';
+  const reg = panelRegistry[name];
+  if(!reg){ if(titleEl) titleEl.textContent=name.toUpperCase(); if(hintEl) hintEl.textContent=''; return; }
+  if(titleEl) titleEl.textContent = reg.title;
+  if(hintEl)  hintEl.textContent  = reg.hint;
+  const slotReg = {...reg, animId:null};
+  reg.buildFn(body, slotReg);
+  el._slotReg = slotReg;
+}
+
+/* ── updateSlot — same as rebuildSlotContent ── */
+function updateSlot(side, el){ rebuildSlotContent(side, el); }
+
+/* ── Open a panel (generic) ── */
+function openPanel(name){
+  // already visible as active — do nothing
+  if(slotLeft===name || slotRight===name){ return; }
+
+  // already in a tab somewhere — just switch to it
+  if(slotLeftTabs.includes(name)){  switchSlotTab('left',name);  return; }
+  if(slotRightTabs.includes(name)){ switchSlotTab('right',name); return; }
+
+  if(mode==='none'){
+    // first panel — fullscreen left
+    slotLeftTabs=[name]; slotLeft=name;
+    slotRightTabs=[]; slotRight=null;
+    mode='focus'; lastAddedSide='left';
+    applyLayout();
+    print('> '+name+' opened','li');
+  } else if(mode==='focus'){
+    // second panel — auto split to right
+    slotRightTabs=[name]; slotRight=name;
+    mode='split'; lastAddedSide='right';
+    document.getElementById('panel-left').style.width='';
+    document.getElementById('panel-right').style.width='';
+    applyLayout();
+    document.getElementById('btn-split').classList.add('on');
+    print('> '+name+' opened — auto split','li');
+  } else if(mode==='split'){
+    // alternate L/R same as atoms
+    const addTo2=(lastAddedSide==='right')?'left':'right';
+    if(addTo2==='left'){
+      if(!slotLeftTabs.includes(name)) slotLeftTabs.push(name);
+      slotLeft=name;
+      const pL=document.getElementById('panel-left');
+      rebuildSlotContent('left',pL);
+      renderSlotTabBar('left');
+    } else {
+      if(!slotRightTabs.includes(name)) slotRightTabs.push(name);
+      slotRight=name;
+      const pR=document.getElementById('panel-right');
+      rebuildSlotContent('right',pR);
+      renderSlotTabBar('right');
+    }
+    lastAddedSide=addTo2;
+    print('> '+name+' added to '+addTo2+' slot','li');
+  }
+  updatePanelsPopup();
+}
+
+/* ── cmdSplit ── */
+function cmdSplit(){
+  if(mode==='none'){ print('No panel open. Open a panel first.','le'); return; }
+  if(mode==='focus'){
+    slotRight = 'rain'; slotRightTabs = ['rain']; mode='split';
+    document.getElementById('panel-left').style.width='';
+    document.getElementById('panel-right').style.width='';
+    applyLayout();
+    document.getElementById('btn-split').classList.add('on');
+    print('> Split: '+slotLeft+' | rain','li');
+  } else {
+    // collapse back to focus
+    mode='focus'; slotRight=null; slotRightTabs=[];
+    document.getElementById('panel-left').style.width='';
+    applyLayout();
+    document.getElementById('btn-split').classList.remove('on');
+    print('> Focus: '+slotLeft,'li');
+  }
+  updatePanelsPopup();
+}
+
+/* ── cmdFlip ── */
+function cmdFlip(){
+  if(mode!=='split'){ print('Flip only works in split mode','le'); return; }
+  [slotLeft,slotRight]=[slotRight,slotLeft];
+  [slotLeftTabs,slotRightTabs]=[slotRightTabs,slotLeftTabs];
+  applyLayout();
+  renderSlotTabBar('left');
+  renderSlotTabBar('right');
+  print('> Panels flipped','li');
+}
+
+/* ── cmdFocus ── */
+function cmdFocus(arg){
+  if(!arg){ print('Usage: focus <panel>  e.g. focus editor  focus rain','le'); return; }
+  const name = arg.trim().toLowerCase()==='editor'?'editor':arg.trim().toLowerCase();
+  // find which slot it's in
+  if(slotLeftTabs.includes(name)){ switchSlotTab('left',name); }
+  else if(slotRightTabs.includes(name)){ switchSlotTab('right',name); }
+  slotLeft=name; mode='focus'; slotRight=null; slotRightTabs=[];
+  document.getElementById('panel-left').style.width='';
+  applyLayout();
+  document.getElementById('btn-split').classList.remove('on');
+  print('> Focus: '+name,'li');
+  updatePanelsPopup();
+}
+
+/* ── cmdFront ── */
+function cmdFront(arg){
+  if(!arg){ print('Usage: front <panel>','le'); return; }
+  const name=arg.trim().toLowerCase();
+  if(slotLeftTabs.includes(name))  switchSlotTab('left',name);
+  else if(slotRightTabs.includes(name)) switchSlotTab('right',name);
+  else print(name+' is not open','le');
+}
+
+/* ── closePanel ── */
+function closePanel(name){
+  if(slotLeftTabs.includes(name))  closeSlotTab('left',name);
+  else if(slotRightTabs.includes(name)) closeSlotTab('right',name);
+  else { print(name+' panel not found','le'); return; }
+  updatePanelsPopup();
+}
+
+/* ── Panels popup ── */
+function togglePanelsPopup(){
+  const p=document.getElementById('panels-popup');
+  updatePanelsPopup();
+  p.classList.toggle('show');
+}
+function updatePanelsPopup(){
+  const list=document.getElementById('pp-list'); if(!list) return;
+  list.innerHTML='';
+  const sections=[
+    {label:'LEFT SLOT', tabs:slotLeftTabs, active:slotLeft, side:'left'},
+    {label:'RIGHT SLOT',tabs:slotRightTabs,active:slotRight,side:'right'},
+  ];
+  sections.forEach(sec=>{
+    if(!sec.tabs.length) return;
+    const hdr=document.createElement('div'); hdr.style.cssText='opacity:.3;font-size:10px;margin-top:6px;letter-spacing:.08em;'; hdr.textContent=sec.label; list.appendChild(hdr);
+    sec.tabs.forEach(name=>{
+      const d=document.createElement('div'); d.className='pp-item';
+      d.textContent=(name===sec.active?'▶ ':'  ')+name.replace('atom_','').toUpperCase();
+      d.onclick=()=>{ switchSlotTab(sec.side,name); document.getElementById('panels-popup').classList.remove('show'); };
+      list.appendChild(d);
+    });
+  });
+  if(!slotLeftTabs.length&&!slotRightTabs.length){ list.innerHTML='<div style="opacity:.3">none</div>'; }
+}
+document.addEventListener('click',e=>{
+  const p=document.getElementById('panels-popup');
+  const b=document.getElementById('btn-panels');
+  if(p&&b&&!p.contains(e.target)&&e.target!==b) p.classList.remove('show');
+});
+
+/* split drag resize */
+const dragEl=document.getElementById('split-drag');
+let dRes=false,dX0,dLW0;
+dragEl.addEventListener('mousedown',e=>{ dRes=true; dX0=e.clientX; dLW0=document.getElementById('panel-left').offsetWidth; e.preventDefault(); });
+window.addEventListener('mousemove',e=>{
+  if(!dRes) return;
+  const stage=document.getElementById('stage');
+  const total=stage.clientWidth;
+  const newW=Math.max(260,Math.min(dLW0+(e.clientX-dX0),total-260));
+  document.getElementById('panel-left').style.width=newW+'px';
+  document.getElementById('panel-right').style.width=(total-newW)+'px';
+  dragEl.style.left=(newW-3)+'px';
+});
+window.addEventListener('mouseup',()=>dRes=false);
+
+/* ═══════════════════════
+   EDITOR PANEL
+═══════════════════════ */
+const STORE_KEY='mx_tabs';
+let tabs=[],activeTabId=null,tabCounter=0;
+function loadTabs(){try{const r=localStorage.getItem(STORE_KEY);if(r){tabs=JSON.parse(r);tabCounter=tabs.reduce((m,t)=>Math.max(m,t.id),0);}}catch{tabs=[];}}
+function saveTabs(){try{localStorage.setItem(STORE_KEY,JSON.stringify(tabs));}catch{}}
+
+function buildEditorContent(body){
+  // tab bar
+  const tabBar=document.createElement('div');tabBar.id='tab-bar';
+  const newBtn=document.createElement('span');newBtn.id='new-tab-btn';newBtn.textContent='＋';newBtn.onclick=()=>newTab();
+  tabBar.appendChild(newBtn);body.appendChild(tabBar);
+  // wrap
+  const wrap=document.createElement('div');wrap.id='editor-wrap';
+  const ln=document.createElement('div');ln.id='line-numbers';ln.textContent='1';
+  const ta=document.createElement('textarea');ta.id='editor-ta';ta.spellcheck=false;ta.placeholder='Start typing… Ctrl+S to save';
+  ta.addEventListener('input',()=>{const cur=tabs.find(t=>t.id===activeTabId);if(cur){cur.content=ta.value;saveTabs();renderTabs();updateLN();updateSP();}});
+  ta.addEventListener('scroll',()=>ln.scrollTop=ta.scrollTop);
+  ta.addEventListener('keyup',updateSP);ta.addEventListener('click',updateSP);
+  wrap.appendChild(ln);wrap.appendChild(ta);body.appendChild(wrap);
+  // status
+  const st=document.createElement('div');st.id='editor-status';st.innerHTML='<span id="status-name">untitled</span><span id="status-pos">Ln 1, Col 1</span>';body.appendChild(st);
+  // flash
+  const fl=document.createElement('span');fl.id='save-flash';fl.textContent='✓ Saved';body.appendChild(fl);
+  if(tabs.length===0)newTab();else renderTabs();
+  ta.focus();
+}
+
+registerPanel('editor','TEXT EDITOR','ctrl+s to save',buildEditorContent,()=>{});
+
+function newTab(name,content){
+  tabCounter++;
+  const t={id:tabCounter,name:name||'untitled-'+tabCounter,content:content||'',savedContent:content||''};
+  tabs.push(t);activeTabId=t.id;saveTabs();renderTabs();
+  const ta=document.getElementById('editor-ta');if(ta)ta.focus();
+  return t;
+}
+function switchTab(id){const ta=document.getElementById('editor-ta');const cur=tabs.find(t=>t.id===activeTabId);if(cur&&ta)cur.content=ta.value;activeTabId=id;saveTabs();renderTabs();}
+function closeTab(id){const idx=tabs.findIndex(t=>t.id===id);if(idx===-1)return;if(tabs[idx].content!==tabs[idx].savedContent&&!confirm('"'+tabs[idx].name+'" unsaved. Close?'))return;tabs.splice(idx,1);if(activeTabId===id)activeTabId=tabs.length?tabs[Math.max(0,idx-1)].id:null;saveTabs();renderTabs();}
+function renderTabs(){
+  const bar=document.getElementById('tab-bar');if(!bar)return;
+  [...bar.querySelectorAll('.tab')].forEach(e=>e.remove());
+  const nb=document.getElementById('new-tab-btn');
+  tabs.forEach(tab=>{
+    const el=document.createElement('div');el.className='tab'+(tab.id===activeTabId?' active':'')+(tab.content!==tab.savedContent?' unsaved':'');
+    el.innerHTML='<span class="td"></span><span>'+tab.name+'</span><span class="tx">✕</span>';
+    el.addEventListener('click',e=>{if(e.target.classList.contains('tx')){closeTab(tab.id);return;}switchTab(tab.id);});
+    bar.insertBefore(el,nb);
+  });
+  const ta=document.getElementById('editor-ta');const sn=document.getElementById('status-name');
+  const active=tabs.find(t=>t.id===activeTabId);
+  if(active&&ta){ta.value=active.content;if(sn)sn.textContent=active.name+(active.content!==active.savedContent?' ●':'');}
+  else{if(ta)ta.value='';if(sn)sn.textContent='—';}
+  updateLN();
+}
+function updateSP(){const ta=document.getElementById('editor-ta');if(!ta)return;const txt=ta.value.substring(0,ta.selectionStart);const lns=txt.split('\n');const sp=document.getElementById('status-pos');if(sp)sp.textContent='Ln '+lns.length+', Col '+(lns[lns.length-1].length+1);}
+function updateLN(){const ln=document.getElementById('line-numbers');if(!ln)return;const ta=document.getElementById('editor-ta');if(!ta)return;const n=(ta.value.match(/\n/g)||[]).length+1;ln.innerHTML=Array.from({length:n},(_,i)=>i+1).join('<br>');}
+document.addEventListener('keydown',async e=>{if(e.ctrlKey&&e.key==='s'){e.preventDefault();await saveCurrentTab();}});
+async function saveCurrentTab(){
+  const cur=tabs.find(t=>t.id===activeTabId);
+  if(!cur) return;
+  try {
+    // Use Electron native dialog if available
+    if(window.electronAPI && window.electronAPI.saveFile){
+      const name=cur.name.endsWith('.txt')?cur.name:cur.name+'.txt';
+      const result=await window.electronAPI.saveFile({ defaultName:name, content:cur.content });
+      if(!result.ok) return;
+      // extract filename from path
+      const parts=result.filePath.replace(/\\/g,'/').split('/');
+      cur.name=parts[parts.length-1];
+      cur.savedContent=cur.content;
+      saveTabs(); renderTabs();
+      const fl=document.getElementById('save-flash');
+      if(fl){fl.classList.add('show');setTimeout(()=>fl.classList.remove('show'),1500);}
+      return;
+    }
+    // Fallback: browser showSaveFilePicker
+    const h=await window.showSaveFilePicker({
+      suggestedName:cur.name.endsWith('.txt')?cur.name:cur.name+'.txt',
+      types:[{description:'Text',accept:{'text/plain':['.txt']}}]
+    });
+    const w=await h.createWritable();
+    await w.write(cur.content);
+    await w.close();
+    cur.name=h.name; cur.savedContent=cur.content;
+    saveTabs(); renderTabs();
+    const fl=document.getElementById('save-flash');
+    if(fl){fl.classList.add('show');setTimeout(()=>fl.classList.remove('show'),1500);}
+  } catch(e) {
+    if(e.name!=='AbortError') print('Save error: '+e.message,'le');
+  }
+};
+const NCHARS='01ウエオ@#12アイ';
+
+function buildAtomContent(model,body,reg){
+  const wrap=document.createElement('div');wrap.className='atom-wrap';
+  const cv=document.createElement('canvas');cv.className='atom-cvs';
+  const lbl=document.createElement('div');lbl.className='atom-lbl';lbl.textContent=ATOM_MODELS[model];
+  wrap.appendChild(cv);wrap.appendChild(lbl);body.appendChild(wrap);
+  startAtomAnim(model,cv,reg);
+}
+
+/* ── 3D projection helper ── */
+function project3D(x3,y3,z3,cx,cy,fov){
+  const z=z3+fov;
+  const s=fov/z;
+  return {x:cx+x3*s, y:cy+y3*s, s:s};
+}
+
+/* ── Draw nucleus cluster of matrix chars ── */
+function drawNucleus(ctx,cx,cy,R,t,protons,neutrons){
+  const nr=R*0.12;
+  const total=protons+neutrons;
+  for(let i=0;i<total;i++){
+    // pack into sphere using golden angle
+    const phi=Math.acos(1-2*(i+0.5)/total);
+    const theta=(Math.PI*(1+Math.sqrt(5))*i)+(t*0.4);
+    const nx=Math.sin(phi)*Math.cos(theta)*nr;
+    const ny=Math.sin(phi)*Math.sin(theta)*nr*0.7;
+    const nz=Math.cos(phi)*nr;
+    const pr=project3D(nx,ny,nz,cx,cy,300);
+    const isP=i<protons;
+    // depth fade
+    const alpha=0.55+pr.s*0.4;
+    ctx.fillStyle=isP?'rgba(255,55,55,'+Math.min(1,alpha)+')':'rgba(100,160,255,'+Math.min(1,alpha)+')';
+    const fs=Math.max(9,Math.min(15,10*pr.s));
+    ctx.font='bold '+fs+'px monospace';
+    ctx.fillText(isP?'P':'N',pr.x-fs*0.3,pr.y+fs*0.35);
+  }
+}
+
+/* ── Draw 3D elliptical orbit path (dashed) ── */
+function drawOrbit3D(ctx,cx,cy,R,tiltX,tiltZ,rotY,col){
+  ctx.strokeStyle=col;ctx.lineWidth=0.8;
+  ctx.setLineDash([4,6]);ctx.beginPath();
+  let first=true;
+  for(let a=0;a<=Math.PI*2+0.01;a+=0.08){
+    // orbit in XZ plane then tilt
+    const ox=Math.cos(a)*R;
+    const oz=Math.sin(a)*R*0.35; // flatten to ellipse
+    // rotate around Y by rotY
+    const rx=ox*Math.cos(rotY)-oz*Math.sin(rotY);
+    const rz=ox*Math.sin(rotY)+oz*Math.cos(rotY);
+    // tilt around X by tiltX
+    const ry2=rz*Math.sin(tiltX);
+    const rz2=rz*Math.cos(tiltX);
+    // tilt around Z by tiltZ
+    const rx3=rx*Math.cos(tiltZ)-ry2*Math.sin(tiltZ);
+    const ry3=rx*Math.sin(tiltZ)+ry2*Math.cos(tiltZ);
+    const p=project3D(rx3,ry3,rz2,cx,cy,300);
+    if(first){ctx.moveTo(p.x,p.y);first=false;}else ctx.lineTo(p.x,p.y);
+  }
+  ctx.stroke();ctx.setLineDash([]);
+}
+
+/* ── Get 3D point on orbit ── */
+function orbitPoint3D(a,R,tiltX,tiltZ,rotY,cx,cy){
+  const ox=Math.cos(a)*R,oz=Math.sin(a)*R*0.35;
+  const rx=ox*Math.cos(rotY)-oz*Math.sin(rotY);
+  const rz=ox*Math.sin(rotY)+oz*Math.cos(rotY);
+  const ry2=rz*Math.sin(tiltX),rz2=rz*Math.cos(tiltX);
+  const rx3=rx*Math.cos(tiltZ)-ry2*Math.sin(tiltZ);
+  const ry3=rx*Math.sin(tiltZ)+ry2*Math.cos(tiltZ);
+  return {...project3D(rx3,ry3,rz2,cx,cy,300),z:rz2};
+}
+
+function startAtomAnim(model,cv,reg){
+  if(reg.animId){cancelAnimationFrame(reg.animId);reg.animId=null;}
+  const ctx=cv.getContext('2d');
+  let W,H; let t=0;
+  function resize(){
+    W=cv.width=cv.parentElement.clientWidth||300;
+    H=cv.height=cv.parentElement.clientHeight||300;
+  }
+  resize();
+  const ro=new ResizeObserver(()=>resize()); ro.observe(cv.parentElement);
+
+  // ── Char helpers
+  function rc(s){return s[Math.floor(Math.random()*s.length)];}
+  const GC=CHARS, NC='PPPPPNNNNN';
+
+  // ── Tumble state
+  let rX=0,rY=0,rZ=0;
+
+  function tumble(x,y,z){
+    let rx=x*Math.cos(rY)+z*Math.sin(rY), ry=y, rz=-x*Math.sin(rY)+z*Math.cos(rY);
+    let rx2=rx, ry2=ry*Math.cos(rX)-rz*Math.sin(rX), rz2=ry*Math.sin(rX)+rz*Math.cos(rX);
+    let rx3=rx2*Math.cos(rZ)-ry2*Math.sin(rZ), ry3=rx2*Math.sin(rZ)+ry2*Math.cos(rZ);
+    return{x:rx3,y:ry3,z:rz2};
+  }
+  function proj(x,y,z,cx,cy,fov=320){
+    const tb=tumble(x,y,z); const zd=tb.z+fov;
+    const s=fov/zd; return{x:cx+tb.x*s,y:cy+tb.y*s,s,z:tb.z};
+  }
+
+  // ── Nucleus: cluster of P/N chars, pulsing
+  function drawNucleus(cx,cy,R,protons,neutrons){
+    const nr=R*0.11, total=protons+neutrons;
+    const pulse=1+0.06*Math.sin(t*4);
+    const pts=[];
+    for(let i=0;i<total;i++){
+      const phi=Math.acos(1-2*(i+0.5)/total);
+      const theta=Math.PI*(1+Math.sqrt(5))*i+t*0.5;
+      const nx=Math.sin(phi)*Math.cos(theta)*nr*pulse;
+      const ny=Math.sin(phi)*Math.sin(theta)*nr*pulse*0.8;
+      const nz=Math.cos(phi)*nr*pulse;
+      const p=proj(nx,ny,nz,cx,cy,400);
+      pts.push({p,isP:i<protons});
+    }
+    pts.sort((a,b)=>a.p.z-b.p.z).forEach(({p,isP})=>{
+      if(!isFinite(p.x)||!isFinite(p.y))return;
+      const a=Math.min(1,0.6+p.s*0.35);
+      const glow=0.5+0.5*Math.sin(t*3+p.z);
+      ctx.shadowColor=isP?'rgba(255,80,80,0.6)':'rgba(80,140,255,0.6)';
+      ctx.shadowBlur=6*glow;
+      ctx.fillStyle=isP?`rgba(255,${60+Math.floor(40*glow)},60,${a})`:`rgba(80,${130+Math.floor(60*glow)},255,${a})`;
+      const fs=Math.max(9,Math.min(14,11*p.s));
+      ctx.font=`bold ${fs}px monospace`;
+      ctx.fillText(isP?'P':'N',p.x-fs*0.3,p.y+fs*0.35);
+      ctx.shadowBlur=0;
+    });
+  }
+
+  // ── Electron with comet trail
+  const trails={};
+  function drawElectron(id,x3,y3,z3,cx,cy){
+    const p=proj(x3,y3,z3,cx,cy);
+    if(!isFinite(p.x)||!isFinite(p.y))return p;
+    if(!trails[id])trails[id]=[];
+    trails[id].push({x:p.x,y:p.y,s:p.s});
+    if(trails[id].length>18)trails[id].shift();
+    // draw trail
+    trails[id].forEach((tp,i)=>{
+      const fade=i/trails[id].length;
+      const a=fade*0.5*Math.min(1,tp.s);
+      ctx.fillStyle=`rgba(0,220,255,${a})`;
+      const fs=Math.max(7,8*tp.s*fade);
+      ctx.font=`${fs}px monospace`;
+      ctx.fillText(rc(GC),tp.x,tp.y);
+    });
+    // electron head glow
+    const depth=Math.min(1,0.65+p.s*0.35);
+    ctx.shadowColor='rgba(0,230,255,0.95)';ctx.shadowBlur=12;
+    ctx.fillStyle=`rgba(0,230,255,${depth})`;
+    ctx.font='bold 14px monospace';
+    ctx.fillText('e⁻',p.x-6,p.y+5);
+    ctx.shadowBlur=0;
+    return p;
+  }
+
+  // ── Stable pre-generated cloud points
+  const cloudPts=Array.from({length:320},(_,i)=>({
+    phi:Math.random()*Math.PI*2, th:Math.random()*Math.PI,
+    r:Math.random(), seed:Math.random()*100, idx:i,
+  }));
+
+  // ── Rutherford orbit basis
+  function orbitBasis(nx,ny,nz){
+    let t1x=-nz,t1y=0,t1z=nx;
+    const l=Math.sqrt(t1x*t1x+t1y*t1y+t1z*t1z);
+    if(l<0.001){t1x=0;t1y=0;t1z=1;}else{t1x/=l;t1y/=l;t1z/=l;}
+    return{t1x,t1y,t1z,
+      t2x:ny*t1z-nz*t1y, t2y:nz*t1x-nx*t1z, t2z:nx*t1y-ny*t1x};
+  }
+  function orbitPt(a,r,b){
+    return{x3:r*(Math.cos(a)*b.t1x+Math.sin(a)*b.t2x),
+           y3:r*(Math.cos(a)*b.t1y+Math.sin(a)*b.t2y),
+           z3:r*(Math.cos(a)*b.t1z+Math.sin(a)*b.t2z)};
+  }
+
+  function loop(){
+    reg.animId=requestAnimationFrame(loop);
+    t+=0.016;
+    rY+=0.007; rX+=0.003; rZ+=0.0015;
+    const cx=W/2,cy=H/2,R=Math.min(W,H)*0.36;
+    ctx.clearRect(0,0,W,H);
+
+    /* ══════════ DALTON ══════════
+       Solid 3D sphere with surface shading:
+       bright on one hemisphere, dim on other.
+       Chars get larger/brighter as they face the viewer. */
+    if(model==='dalton'){
+      const pts=[...cloudPts].map(p=>{
+        const phi=p.phi+t*0.07, th=p.th;
+        const r=p.r*R;
+        const x3=r*Math.sin(th)*Math.cos(phi);
+        const y3=r*Math.cos(th);
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        // surface normal dot light (light from top-left)
+        const nx2=Math.sin(th)*Math.cos(phi);
+        const ny2=Math.cos(th);
+        const light=0.3+0.7*Math.max(0,(nx2*(-0.5)+ny2*0.8));
+        const alpha=(0.15+0.7*(1-p.r*0.6))*light;
+        return{pp,alpha,r,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      pts.forEach(({pp,alpha,r})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y))return;
+        const fs=Math.max(7,Math.min(13,9*pp.s));
+        ctx.fillStyle=`rgba(0,255,65,${Math.min(0.9,alpha)})`;
+        ctx.font=`${fs}px monospace`;
+        ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+      // subtle glow at center
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*0.4);
+      grd.addColorStop(0,'rgba(0,255,65,0.07)');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+    }
+
+    /* ══════════ THOMSON ══════════
+       Soft glowing blob + electrons on Lissajous paths */
+    else if(model==='thomson'){
+      // glowing blob — chars brightest at center
+      const pts=[...cloudPts.slice(0,180)].map(p=>{
+        const phi=p.phi+t*0.04, th=p.th;
+        const r=p.r*R;
+        const x3=r*Math.sin(th)*Math.cos(phi)+Math.sin(p.seed+t*0.3)*4;
+        const y3=r*Math.cos(th)+Math.cos(p.seed*1.2+t*0.3)*4;
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        const coreDist=Math.sqrt(x3*x3+y3*y3+z3*z3)/R;
+        const alpha=(0.55-0.45*coreDist)*Math.min(1,pp.s*0.8+0.3);
+        return{pp,alpha,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      // radial glow background
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*1.05);
+      grd.addColorStop(0,'rgba(0,255,65,0.08)');
+      grd.addColorStop(0.5,'rgba(0,255,65,0.03)');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+      pts.forEach(({pp,alpha})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y)||alpha<0.03)return;
+        ctx.fillStyle=`rgba(0,255,65,${alpha})`;
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      // 6 electrons on Lissajous-like 3D paths
+      const eLiss=[
+        {ax:R*0.55,ay:R*0.55,az:R*0.3, fx:1.3,fy:0.9,fz:1.1, px:0,     py:Math.PI/2, pz:0},
+        {ax:R*0.6, ay:R*0.4, az:R*0.5, fx:0.7,fy:1.4,fz:0.8, px:1.0,   py:0,         pz:2.1},
+        {ax:R*0.4, ay:R*0.6, az:R*0.4, fx:1.1,fy:0.8,fz:1.3, px:2.0,   py:1.0,       pz:0.5},
+        {ax:R*0.5, ay:R*0.5, az:R*0.5, fx:1.5,fy:1.2,fz:0.7, px:3.0,   py:2.0,       pz:1.0},
+        {ax:R*0.65,ay:R*0.35,az:R*0.3, fx:0.9,fy:1.6,fz:1.0, px:0.5,   py:3.0,       pz:2.5},
+        {ax:R*0.3, ay:R*0.65,az:R*0.55,fx:1.2,fy:0.7,fz:1.4, px:1.5,   py:0.5,       pz:3.5},
+      ];
+      eLiss.forEach((e,i)=>{
+        const x3=e.ax*Math.sin(t*e.fx*0.5+e.px);
+        const y3=e.ay*Math.sin(t*e.fy*0.5+e.py);
+        const z3=e.az*Math.sin(t*e.fz*0.5+e.pz);
+        drawElectron('t'+i,x3,y3,z3,cx,cy);
+      });
+    }
+
+    /* ══════════ RUTHERFORD ══════════
+       3 independent orbital planes, orbit path as stream of dim chars,
+       brightening near the electron (comet glow on the ring itself) */
+    else if(model==='rutherford'){
+      const PI=Math.PI;
+      const orbits=[
+        {nx:1, ny:0, nz:0, speed:1.3, offset:0},
+        {nx:Math.cos(PI/3), ny:Math.sin(PI/3), nz:0, speed:0.9, offset:PI*0.66},
+        {nx:Math.cos(-PI/3), ny:Math.sin(-PI/3), nz:0, speed:1.1, offset:PI*1.33},
+      ];
+
+      // collect orbit ring points with depth
+      const allRingPts=[];
+      orbits.forEach((orb,oi)=>{
+        const basis=orbitBasis(orb.nx,orb.ny,orb.nz);
+        const eAngle=t*orb.speed+orb.offset;
+        const steps=60;
+        for(let si=0;si<=steps;si++){
+          const a=(si/steps)*Math.PI*2;
+          const {x3,y3,z3}=orbitPt(a,R*0.84,basis);
+          const p=proj(x3,y3,z3,cx,cy,320);
+          // proximity to electron on this orbit
+          const diff=Math.abs(((a-eAngle)%(Math.PI*2)+Math.PI*3)%(Math.PI*2)-Math.PI);
+          const proximity=Math.max(0,1-diff/1.2);
+          allRingPts.push({p,proximity,oi,z:p.z});
+        }
+      });
+
+      // depth sort ring — draw back first
+      allRingPts.sort((a,b)=>a.z-b.z).forEach(({p,proximity,oi})=>{
+        if(!isFinite(p.x)||!isFinite(p.y))return;
+        const baseAlpha=0.12+0.1*Math.sin(t*0.5+oi);
+        const alpha=baseAlpha+proximity*0.55;
+        const g=Math.floor(180+75*proximity);
+        ctx.fillStyle=`rgba(0,${g},65,${Math.min(0.9,alpha)})`;
+        ctx.font=`${Math.max(8,9*p.s)}px monospace`;
+        ctx.fillText(rc(GC),p.x,p.y);
+      });
+
+      // nucleus between back and front electrons
+      drawNucleus(cx,cy,R,8,8);
+
+      // electrons
+      orbits.forEach((orb,i)=>{
+        const basis=orbitBasis(orb.nx,orb.ny,orb.nz);
+        const a=t*orb.speed+orb.offset;
+        const {x3,y3,z3}=orbitPt(a,R*0.84,basis);
+        drawElectron('r'+i,x3,y3,z3,cx,cy);
+      });
+    }
+
+    /* ══════════ BOHR ══════════
+       Shells as rings of drifting matrix chars + trailing electrons */
+    else if(model==='bohr'){
+      const shells=[
+        {r:R*0.30, electrons:2, speed:2.2, tiltX:0.18, color:'rgba(0,255,180,'},
+        {r:R*0.52, electrons:8, speed:1.4, tiltX:0.10, color:'rgba(0,220,255,'},
+        {r:R*0.76, electrons:3, speed:0.9, tiltX:0.06, color:'rgba(0,180,255,'},
+      ];
+
+      // draw shell rings as dense char rings
+      shells.forEach((sh,si)=>{
+        const steps=72;
+        const ringPts=[];
+        for(let i=0;i<=steps;i++){
+          const a=(i/steps)*Math.PI*2;
+          // slight tilt per shell for 3D feel
+          const x3=sh.r*Math.cos(a);
+          const y3=sh.r*Math.sin(a)*Math.cos(sh.tiltX)+sh.r*0*Math.sin(sh.tiltX);
+          const z3=-sh.r*Math.sin(a)*Math.sin(sh.tiltX);
+          const p=proj(x3,y3,z3,cx,cy,360);
+
+          // brightness ripple along ring
+          const ripple=0.5+0.5*Math.sin(a*3-t*(si+1)*0.8);
+          const alpha=(0.12+0.18*ripple)*Math.min(1,p.s*0.7+0.4);
+          ringPts.push({p,alpha,z:p.z,ripple});
+        }
+        ringPts.sort((a,b)=>a.z-b.z).forEach(({p,alpha,ripple})=>{
+          if(!isFinite(p.x)||!isFinite(p.y))return;
+          const g=Math.floor(180+75*ripple);
+          ctx.fillStyle=`rgba(0,${g},255,${alpha})`;
+          ctx.font=`${Math.max(8,9*p.s)}px monospace`;
+          ctx.fillText(rc(GC),p.x,p.y);
+        });
+      });
+
+      drawNucleus(cx,cy,R,6,6);
+
+      // electrons with trails
+      shells.forEach((sh,si)=>{
+        for(let i=0;i<sh.electrons;i++){
+          const a=t*sh.speed+(i/sh.electrons)*Math.PI*2;
+          const x3=sh.r*Math.cos(a);
+          const y3=sh.r*Math.sin(a)*Math.cos(sh.tiltX);
+          const z3=-sh.r*Math.sin(a)*Math.sin(sh.tiltX);
+          drawElectron(`b${si}_${i}`,x3,y3,z3,cx,cy);
+        }
+      });
+    }
+
+    /* ══════════ QUANTUM ══════════
+       Breathing probability cloud — density waves pulse from nucleus */
+    else if(model==='quantum'){
+      // heartbeat pulse
+      const beat=0.5+0.5*Math.abs(Math.sin(t*2.5));
+      const breathe=1+0.08*Math.sin(t*2.5);
+
+      const sorted=[...cloudPts].map(p=>{
+        const phi=p.phi+t*0.05, th=p.th;
+        const rawR=p.r;
+        // radial distribution: peak at ~0.45R, breathing
+        const peakR=0.45*breathe;
+        const prob=rawR*rawR*Math.exp(-rawR/peakR*2.5);
+        const r=(0.1+rawR*0.9)*R*breathe;
+        const x3=r*Math.sin(th)*Math.cos(phi)+Math.sin(p.seed+t*0.4)*3;
+        const y3=r*Math.cos(th)+Math.cos(p.seed*1.3+t*0.4)*3;
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        const isCyan=p.idx%6===0;
+        // color shift based on density: high density = warmer green, low = cyan
+        const alpha=Math.min(0.85, prob*4+0.04);
+        return{pp,alpha,isCyan,prob,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      // pulse glow
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*(0.8+0.2*beat));
+      grd.addColorStop(0,`rgba(0,255,100,${0.06*beat})`);
+      grd.addColorStop(0.4,`rgba(0,255,65,${0.03*beat})`);
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+      sorted.forEach(({pp,alpha,isCyan,prob})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y)||alpha<0.03)return;
+        // color temperature: high prob = bright green, low = cyan
+        const g=Math.floor(200+55*prob*3);
+        const b=Math.floor(65+190*(1-Math.min(1,prob*4)));
+        ctx.fillStyle=isCyan?`rgba(0,220,255,${alpha})`:`rgba(0,${g},${b},${alpha})`;
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      drawNucleus(cx,cy,R,1,1);
+    }
+
+    /* ══════════ MODERN ══════════
+       s + px + py + pz orbitals pulsing alternately */
+    else if(model==='modern'){
+      // orbital phase — each lobe pulses in sequence
+      const phase=t*0.8;
+      const sPulse=0.6+0.4*Math.abs(Math.sin(phase));
+      const pxPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI*0.5));
+      const pyPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI));
+      const pzPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI*1.5));
+
+      const allOrbPts=[];
+
+      // s orbital — central sphere
+      cloudPts.slice(0,50).forEach(p=>{
+        const r=p.r*R*0.22;
+        const phi=p.phi+t*0.08,th=p.th;
+        const x3=r*Math.sin(th)*Math.cos(phi);
+        const y3=r*Math.cos(th);
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        allOrbPts.push({pp,alpha:(0.4+0.5*sPulse)*p.r*0.6+0.3,col:`rgba(0,255,120,`,z:pp.z});
+      });
+
+      // p lobes — generate cloud points for each axis
+      const lobes=[
+        {axis:[1,0,0], col:'rgba(0,200,255,', pulse:pxPulse},  // px cyan
+        {axis:[0,1,0], col:'rgba(255,200,0,',  pulse:pyPulse},  // py amber
+        {axis:[0,0,1], col:'rgba(200,80,255,',  pulse:pzPulse},  // pz purple
+      ];
+      lobes.forEach(lobe=>{
+        cloudPts.slice(0,70).forEach(p=>{
+          const r=(0.25+p.r*0.6)*R;
+          // lobe shape: elongated along axis, narrow perpendicular
+          const u=p.phi, v=p.th;
+          const sign=Math.cos(u)>0?1:-1;
+          const [ax,ay,az]=lobe.axis;
+          // main axis component
+          const mainR=r*Math.abs(Math.cos(u));
+          // perp component
+          const perpR=r*0.35*Math.sin(v)*Math.abs(Math.sin(u));
+          // build 2 perp vectors to axis
+          const px2=ay==0&&az==0?0:az, py2=ax==0&&az==0?1:0, pz2=ax==0&&ay==0?0:-ax;
+          const ll=Math.sqrt(px2*px2+py2*py2+pz2*pz2)||1;
+          const x3=sign*ax*mainR + (px2/ll)*perpR;
+          const y3=sign*ay*mainR + (py2/ll)*perpR;
+          const z3=sign*az*mainR + (pz2/ll)*perpR;
+          const pp=proj(x3,y3,z3,cx,cy,420);
+          const alpha=(0.15+0.7*lobe.pulse)*p.r*0.5+0.1;
+          allOrbPts.push({pp,alpha,col:lobe.col,z:pp.z});
+        });
+      });
+
+      allOrbPts.sort((a,b)=>a.z-b.z).forEach(({pp,alpha,col})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y))return;
+        ctx.fillStyle=col+Math.min(0.9,alpha)+')';
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      drawNucleus(cx,cy,R,3,3);
+    }
+  } // end loop
+  loop();
+}
+
+function openAtom(model){
+  if(!ATOM_MODELS[model]){ print('Unknown model. Type: atom list','le'); return; }
+  const pname='atom_'+model;
+
+  // register fresh if not already registered
+  if(!panelRegistry[pname]){
+    registerPanel(pname, ATOM_MODELS[model].toUpperCase(), 'closeatom '+model,
+      (body,reg)=>buildAtomContent(model,body,reg),
+      (reg)=>{ if(reg&&reg.animId) cancelAnimationFrame(reg.animId); }
+    );
+  }
+
+  // already visible as active somewhere — just focus it
+  if(slotLeft===pname || slotRight===pname){
+    print('> Atom: '+ATOM_MODELS[model]+' already active','ld'); return;
+  }
+
+  // already in a tab (not active) — switch to it
+  if(slotLeftTabs.includes(pname)){  switchSlotTab('left',pname);  return; }
+  if(slotRightTabs.includes(pname)){ switchSlotTab('right',pname); return; }
+
+  // NO panels open — open fullscreen in left
+  if(mode==='none'){
+    slotLeftTabs=[pname]; slotLeft=pname;
+    slotRightTabs=[]; slotRight=null;
+    mode='focus'; lastAddedSide='left';
+    applyLayout();
+    print('> Atom: '+ATOM_MODELS[model],'li');
+    print('  Open another atom model to split side by side','ld');
+    return;
+  }
+
+  // ONE panel open (focus mode) — auto-split, new atom goes RIGHT
+  if(mode==='focus'){
+    slotRightTabs=[pname]; slotRight=pname;
+    mode='split';
+    document.getElementById('panel-left').style.width='';
+    document.getElementById('panel-right').style.width='';
+    applyLayout();
+    renderSlotTabBar('left');
+    renderSlotTabBar('right');
+    document.getElementById('btn-split').classList.add('on');
+    lastAddedSide='right';  // atom 2 went right, so atom 3 goes left
+    print('> Atom: '+ATOM_MODELS[model]+' — auto-split','li');
+    return;
+  }
+
+  // SPLIT mode — strict L/R/L/R alternation, always ADD as new tab
+  if(mode==='split'){
+    const addTo = (lastAddedSide==='right') ? 'left' : 'right';
+    if(addTo==='left'){
+      if(!slotLeftTabs.includes(pname)) slotLeftTabs.push(pname);
+      slotLeft=pname;
+      const pL=document.getElementById('panel-left');
+      rebuildSlotContent('left',pL);
+      renderSlotTabBar('left');
+    } else {
+      if(!slotRightTabs.includes(pname)) slotRightTabs.push(pname);
+      slotRight=pname;
+      const pR=document.getElementById('panel-right');
+      rebuildSlotContent('right',pR);
+      renderSlotTabBar('right');
+    }
+    lastAddedSide=addTo;
+    print('> Atom: '+ATOM_MODELS[model]+' → '+addTo+' slot (tab '+((addTo==='left'?slotLeftTabs:slotRightTabs).length)+')','li');
+    updatePanelsPopup();
+    return;
+  }
+}
+
+
+function buildAtomContent(model,body,reg){
+  const wrap=document.createElement('div');wrap.className='atom-wrap';
+  const cv=document.createElement('canvas');cv.className='atom-cvs';
+  const lbl=document.createElement('div');lbl.className='atom-lbl';lbl.textContent=ATOM_MODELS[model];
+  wrap.appendChild(cv);wrap.appendChild(lbl);body.appendChild(wrap);
+  startAtomAnim(model,cv,reg);
+}
+
+/* ── 3D projection helper ── */
+function project3D(x3,y3,z3,cx,cy,fov){
+  const z=z3+fov;
+  const s=fov/z;
+  return {x:cx+x3*s, y:cy+y3*s, s:s};
+}
+
+/* ── Draw nucleus cluster of matrix chars ── */
+function drawNucleus(ctx,cx,cy,R,t,protons,neutrons){
+  const nr=R*0.12;
+  const total=protons+neutrons;
+  for(let i=0;i<total;i++){
+    // pack into sphere using golden angle
+    const phi=Math.acos(1-2*(i+0.5)/total);
+    const theta=(Math.PI*(1+Math.sqrt(5))*i)+(t*0.4);
+    const nx=Math.sin(phi)*Math.cos(theta)*nr;
+    const ny=Math.sin(phi)*Math.sin(theta)*nr*0.7;
+    const nz=Math.cos(phi)*nr;
+    const pr=project3D(nx,ny,nz,cx,cy,300);
+    const isP=i<protons;
+    // depth fade
+    const alpha=0.55+pr.s*0.4;
+    ctx.fillStyle=isP?'rgba(255,55,55,'+Math.min(1,alpha)+')':'rgba(100,160,255,'+Math.min(1,alpha)+')';
+    const fs=Math.max(9,Math.min(15,10*pr.s));
+    ctx.font='bold '+fs+'px monospace';
+    ctx.fillText(isP?'P':'N',pr.x-fs*0.3,pr.y+fs*0.35);
+  }
+}
+
+/* ── Draw 3D elliptical orbit path (dashed) ── */
+function drawOrbit3D(ctx,cx,cy,R,tiltX,tiltZ,rotY,col){
+  ctx.strokeStyle=col;ctx.lineWidth=0.8;
+  ctx.setLineDash([4,6]);ctx.beginPath();
+  let first=true;
+  for(let a=0;a<=Math.PI*2+0.01;a+=0.08){
+    // orbit in XZ plane then tilt
+    const ox=Math.cos(a)*R;
+    const oz=Math.sin(a)*R*0.35; // flatten to ellipse
+    // rotate around Y by rotY
+    const rx=ox*Math.cos(rotY)-oz*Math.sin(rotY);
+    const rz=ox*Math.sin(rotY)+oz*Math.cos(rotY);
+    // tilt around X by tiltX
+    const ry2=rz*Math.sin(tiltX);
+    const rz2=rz*Math.cos(tiltX);
+    // tilt around Z by tiltZ
+    const rx3=rx*Math.cos(tiltZ)-ry2*Math.sin(tiltZ);
+    const ry3=rx*Math.sin(tiltZ)+ry2*Math.cos(tiltZ);
+    const p=project3D(rx3,ry3,rz2,cx,cy,300);
+    if(first){ctx.moveTo(p.x,p.y);first=false;}else ctx.lineTo(p.x,p.y);
+  }
+  ctx.stroke();ctx.setLineDash([]);
+}
+
+/* ── Get 3D point on orbit ── */
+function orbitPoint3D(a,R,tiltX,tiltZ,rotY,cx,cy){
+  const ox=Math.cos(a)*R,oz=Math.sin(a)*R*0.35;
+  const rx=ox*Math.cos(rotY)-oz*Math.sin(rotY);
+  const rz=ox*Math.sin(rotY)+oz*Math.cos(rotY);
+  const ry2=rz*Math.sin(tiltX),rz2=rz*Math.cos(tiltX);
+  const rx3=rx*Math.cos(tiltZ)-ry2*Math.sin(tiltZ);
+  const ry3=rx*Math.sin(tiltZ)+ry2*Math.cos(tiltZ);
+  return {...project3D(rx3,ry3,rz2,cx,cy,300),z:rz2};
+}
+
+function startAtomAnim(model,cv,reg){
+  if(reg.animId){cancelAnimationFrame(reg.animId);reg.animId=null;}
+  const ctx=cv.getContext('2d');
+  let W,H; let t=0;
+  function resize(){
+    W=cv.width=cv.parentElement.clientWidth||300;
+    H=cv.height=cv.parentElement.clientHeight||300;
+  }
+  resize();
+  const ro=new ResizeObserver(()=>resize()); ro.observe(cv.parentElement);
+
+  // ── Char helpers
+  function rc(s){return s[Math.floor(Math.random()*s.length)];}
+  const GC=CHARS, NC='PPPPPNNNNN';
+
+  // ── Tumble state
+  let rX=0,rY=0,rZ=0;
+
+  function tumble(x,y,z){
+    let rx=x*Math.cos(rY)+z*Math.sin(rY), ry=y, rz=-x*Math.sin(rY)+z*Math.cos(rY);
+    let rx2=rx, ry2=ry*Math.cos(rX)-rz*Math.sin(rX), rz2=ry*Math.sin(rX)+rz*Math.cos(rX);
+    let rx3=rx2*Math.cos(rZ)-ry2*Math.sin(rZ), ry3=rx2*Math.sin(rZ)+ry2*Math.cos(rZ);
+    return{x:rx3,y:ry3,z:rz2};
+  }
+  function proj(x,y,z,cx,cy,fov=320){
+    const tb=tumble(x,y,z); const zd=tb.z+fov;
+    const s=fov/zd; return{x:cx+tb.x*s,y:cy+tb.y*s,s,z:tb.z};
+  }
+
+  // ── Nucleus: cluster of P/N chars, pulsing
+  function drawNucleus(cx,cy,R,protons,neutrons){
+    const nr=R*0.11, total=protons+neutrons;
+    const pulse=1+0.06*Math.sin(t*4);
+    const pts=[];
+    for(let i=0;i<total;i++){
+      const phi=Math.acos(1-2*(i+0.5)/total);
+      const theta=Math.PI*(1+Math.sqrt(5))*i+t*0.5;
+      const nx=Math.sin(phi)*Math.cos(theta)*nr*pulse;
+      const ny=Math.sin(phi)*Math.sin(theta)*nr*pulse*0.8;
+      const nz=Math.cos(phi)*nr*pulse;
+      const p=proj(nx,ny,nz,cx,cy,400);
+      pts.push({p,isP:i<protons});
+    }
+    pts.sort((a,b)=>a.p.z-b.p.z).forEach(({p,isP})=>{
+      if(!isFinite(p.x)||!isFinite(p.y))return;
+      const a=Math.min(1,0.6+p.s*0.35);
+      const glow=0.5+0.5*Math.sin(t*3+p.z);
+      ctx.shadowColor=isP?'rgba(255,80,80,0.6)':'rgba(80,140,255,0.6)';
+      ctx.shadowBlur=6*glow;
+      ctx.fillStyle=isP?`rgba(255,${60+Math.floor(40*glow)},60,${a})`:`rgba(80,${130+Math.floor(60*glow)},255,${a})`;
+      const fs=Math.max(9,Math.min(14,11*p.s));
+      ctx.font=`bold ${fs}px monospace`;
+      ctx.fillText(isP?'P':'N',p.x-fs*0.3,p.y+fs*0.35);
+      ctx.shadowBlur=0;
+    });
+  }
+
+  // ── Electron with comet trail
+  const trails={};
+  function drawElectron(id,x3,y3,z3,cx,cy){
+    const p=proj(x3,y3,z3,cx,cy);
+    if(!isFinite(p.x)||!isFinite(p.y))return p;
+    if(!trails[id])trails[id]=[];
+    trails[id].push({x:p.x,y:p.y,s:p.s});
+    if(trails[id].length>18)trails[id].shift();
+    // draw trail
+    trails[id].forEach((tp,i)=>{
+      const fade=i/trails[id].length;
+      const a=fade*0.5*Math.min(1,tp.s);
+      ctx.fillStyle=`rgba(0,220,255,${a})`;
+      const fs=Math.max(7,8*tp.s*fade);
+      ctx.font=`${fs}px monospace`;
+      ctx.fillText(rc(GC),tp.x,tp.y);
+    });
+    // electron head glow
+    const depth=Math.min(1,0.65+p.s*0.35);
+    ctx.shadowColor='rgba(0,230,255,0.95)';ctx.shadowBlur=12;
+    ctx.fillStyle=`rgba(0,230,255,${depth})`;
+    ctx.font='bold 14px monospace';
+    ctx.fillText('e⁻',p.x-6,p.y+5);
+    ctx.shadowBlur=0;
+    return p;
+  }
+
+  // ── Stable pre-generated cloud points
+  const cloudPts=Array.from({length:320},(_,i)=>({
+    phi:Math.random()*Math.PI*2, th:Math.random()*Math.PI,
+    r:Math.random(), seed:Math.random()*100, idx:i,
+  }));
+
+  // ── Rutherford orbit basis
+  function orbitBasis(nx,ny,nz){
+    let t1x=-nz,t1y=0,t1z=nx;
+    const l=Math.sqrt(t1x*t1x+t1y*t1y+t1z*t1z);
+    if(l<0.001){t1x=0;t1y=0;t1z=1;}else{t1x/=l;t1y/=l;t1z/=l;}
+    return{t1x,t1y,t1z,
+      t2x:ny*t1z-nz*t1y, t2y:nz*t1x-nx*t1z, t2z:nx*t1y-ny*t1x};
+  }
+  function orbitPt(a,r,b){
+    return{x3:r*(Math.cos(a)*b.t1x+Math.sin(a)*b.t2x),
+           y3:r*(Math.cos(a)*b.t1y+Math.sin(a)*b.t2y),
+           z3:r*(Math.cos(a)*b.t1z+Math.sin(a)*b.t2z)};
+  }
+
+  function loop(){
+    reg.animId=requestAnimationFrame(loop);
+    t+=0.016;
+    rY+=0.007; rX+=0.003; rZ+=0.0015;
+    const cx=W/2,cy=H/2,R=Math.min(W,H)*0.36;
+    ctx.clearRect(0,0,W,H);
+
+    /* ══════════ DALTON ══════════
+       Solid 3D sphere with surface shading:
+       bright on one hemisphere, dim on other.
+       Chars get larger/brighter as they face the viewer. */
+    if(model==='dalton'){
+      const pts=[...cloudPts].map(p=>{
+        const phi=p.phi+t*0.07, th=p.th;
+        const r=p.r*R;
+        const x3=r*Math.sin(th)*Math.cos(phi);
+        const y3=r*Math.cos(th);
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        // surface normal dot light (light from top-left)
+        const nx2=Math.sin(th)*Math.cos(phi);
+        const ny2=Math.cos(th);
+        const light=0.3+0.7*Math.max(0,(nx2*(-0.5)+ny2*0.8));
+        const alpha=(0.15+0.7*(1-p.r*0.6))*light;
+        return{pp,alpha,r,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      pts.forEach(({pp,alpha,r})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y))return;
+        const fs=Math.max(7,Math.min(13,9*pp.s));
+        ctx.fillStyle=`rgba(0,255,65,${Math.min(0.9,alpha)})`;
+        ctx.font=`${fs}px monospace`;
+        ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+      // subtle glow at center
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*0.4);
+      grd.addColorStop(0,'rgba(0,255,65,0.07)');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+    }
+
+    /* ══════════ THOMSON ══════════
+       Soft glowing blob + electrons on Lissajous paths */
+    else if(model==='thomson'){
+      // glowing blob — chars brightest at center
+      const pts=[...cloudPts.slice(0,180)].map(p=>{
+        const phi=p.phi+t*0.04, th=p.th;
+        const r=p.r*R;
+        const x3=r*Math.sin(th)*Math.cos(phi)+Math.sin(p.seed+t*0.3)*4;
+        const y3=r*Math.cos(th)+Math.cos(p.seed*1.2+t*0.3)*4;
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        const coreDist=Math.sqrt(x3*x3+y3*y3+z3*z3)/R;
+        const alpha=(0.55-0.45*coreDist)*Math.min(1,pp.s*0.8+0.3);
+        return{pp,alpha,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      // radial glow background
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*1.05);
+      grd.addColorStop(0,'rgba(0,255,65,0.08)');
+      grd.addColorStop(0.5,'rgba(0,255,65,0.03)');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+      pts.forEach(({pp,alpha})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y)||alpha<0.03)return;
+        ctx.fillStyle=`rgba(0,255,65,${alpha})`;
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      // 6 electrons on Lissajous-like 3D paths
+      const eLiss=[
+        {ax:R*0.55,ay:R*0.55,az:R*0.3, fx:1.3,fy:0.9,fz:1.1, px:0,     py:Math.PI/2, pz:0},
+        {ax:R*0.6, ay:R*0.4, az:R*0.5, fx:0.7,fy:1.4,fz:0.8, px:1.0,   py:0,         pz:2.1},
+        {ax:R*0.4, ay:R*0.6, az:R*0.4, fx:1.1,fy:0.8,fz:1.3, px:2.0,   py:1.0,       pz:0.5},
+        {ax:R*0.5, ay:R*0.5, az:R*0.5, fx:1.5,fy:1.2,fz:0.7, px:3.0,   py:2.0,       pz:1.0},
+        {ax:R*0.65,ay:R*0.35,az:R*0.3, fx:0.9,fy:1.6,fz:1.0, px:0.5,   py:3.0,       pz:2.5},
+        {ax:R*0.3, ay:R*0.65,az:R*0.55,fx:1.2,fy:0.7,fz:1.4, px:1.5,   py:0.5,       pz:3.5},
+      ];
+      eLiss.forEach((e,i)=>{
+        const x3=e.ax*Math.sin(t*e.fx*0.5+e.px);
+        const y3=e.ay*Math.sin(t*e.fy*0.5+e.py);
+        const z3=e.az*Math.sin(t*e.fz*0.5+e.pz);
+        drawElectron('t'+i,x3,y3,z3,cx,cy);
+      });
+    }
+
+    /* ══════════ RUTHERFORD ══════════
+       3 independent orbital planes, orbit path as stream of dim chars,
+       brightening near the electron (comet glow on the ring itself) */
+    else if(model==='rutherford'){
+      const PI=Math.PI;
+      const orbits=[
+        {nx:1, ny:0, nz:0, speed:1.3, offset:0},
+        {nx:Math.cos(PI/3), ny:Math.sin(PI/3), nz:0, speed:0.9, offset:PI*0.66},
+        {nx:Math.cos(-PI/3), ny:Math.sin(-PI/3), nz:0, speed:1.1, offset:PI*1.33},
+      ];
+
+      // collect orbit ring points with depth
+      const allRingPts=[];
+      orbits.forEach((orb,oi)=>{
+        const basis=orbitBasis(orb.nx,orb.ny,orb.nz);
+        const eAngle=t*orb.speed+orb.offset;
+        const steps=60;
+        for(let si=0;si<=steps;si++){
+          const a=(si/steps)*Math.PI*2;
+          const {x3,y3,z3}=orbitPt(a,R*0.84,basis);
+          const p=proj(x3,y3,z3,cx,cy,320);
+          // proximity to electron on this orbit
+          const diff=Math.abs(((a-eAngle)%(Math.PI*2)+Math.PI*3)%(Math.PI*2)-Math.PI);
+          const proximity=Math.max(0,1-diff/1.2);
+          allRingPts.push({p,proximity,oi,z:p.z});
+        }
+      });
+
+      // depth sort ring — draw back first
+      allRingPts.sort((a,b)=>a.z-b.z).forEach(({p,proximity,oi})=>{
+        if(!isFinite(p.x)||!isFinite(p.y))return;
+        const baseAlpha=0.12+0.1*Math.sin(t*0.5+oi);
+        const alpha=baseAlpha+proximity*0.55;
+        const g=Math.floor(180+75*proximity);
+        ctx.fillStyle=`rgba(0,${g},65,${Math.min(0.9,alpha)})`;
+        ctx.font=`${Math.max(8,9*p.s)}px monospace`;
+        ctx.fillText(rc(GC),p.x,p.y);
+      });
+
+      // nucleus between back and front electrons
+      drawNucleus(cx,cy,R,8,8);
+
+      // electrons
+      orbits.forEach((orb,i)=>{
+        const basis=orbitBasis(orb.nx,orb.ny,orb.nz);
+        const a=t*orb.speed+orb.offset;
+        const {x3,y3,z3}=orbitPt(a,R*0.84,basis);
+        drawElectron('r'+i,x3,y3,z3,cx,cy);
+      });
+    }
+
+    /* ══════════ BOHR ══════════
+       Shells as rings of drifting matrix chars + trailing electrons */
+    else if(model==='bohr'){
+      const shells=[
+        {r:R*0.30, electrons:2, speed:2.2, tiltX:0.18, color:'rgba(0,255,180,'},
+        {r:R*0.52, electrons:8, speed:1.4, tiltX:0.10, color:'rgba(0,220,255,'},
+        {r:R*0.76, electrons:3, speed:0.9, tiltX:0.06, color:'rgba(0,180,255,'},
+      ];
+
+      // draw shell rings as dense char rings
+      shells.forEach((sh,si)=>{
+        const steps=72;
+        const ringPts=[];
+        for(let i=0;i<=steps;i++){
+          const a=(i/steps)*Math.PI*2;
+          // slight tilt per shell for 3D feel
+          const x3=sh.r*Math.cos(a);
+          const y3=sh.r*Math.sin(a)*Math.cos(sh.tiltX)+sh.r*0*Math.sin(sh.tiltX);
+          const z3=-sh.r*Math.sin(a)*Math.sin(sh.tiltX);
+          const p=proj(x3,y3,z3,cx,cy,360);
+
+          // brightness ripple along ring
+          const ripple=0.5+0.5*Math.sin(a*3-t*(si+1)*0.8);
+          const alpha=(0.12+0.18*ripple)*Math.min(1,p.s*0.7+0.4);
+          ringPts.push({p,alpha,z:p.z,ripple});
+        }
+        ringPts.sort((a,b)=>a.z-b.z).forEach(({p,alpha,ripple})=>{
+          if(!isFinite(p.x)||!isFinite(p.y))return;
+          const g=Math.floor(180+75*ripple);
+          ctx.fillStyle=`rgba(0,${g},255,${alpha})`;
+          ctx.font=`${Math.max(8,9*p.s)}px monospace`;
+          ctx.fillText(rc(GC),p.x,p.y);
+        });
+      });
+
+      drawNucleus(cx,cy,R,6,6);
+
+      // electrons with trails
+      shells.forEach((sh,si)=>{
+        for(let i=0;i<sh.electrons;i++){
+          const a=t*sh.speed+(i/sh.electrons)*Math.PI*2;
+          const x3=sh.r*Math.cos(a);
+          const y3=sh.r*Math.sin(a)*Math.cos(sh.tiltX);
+          const z3=-sh.r*Math.sin(a)*Math.sin(sh.tiltX);
+          drawElectron(`b${si}_${i}`,x3,y3,z3,cx,cy);
+        }
+      });
+    }
+
+    /* ══════════ QUANTUM ══════════
+       Breathing probability cloud — density waves pulse from nucleus */
+    else if(model==='quantum'){
+      // heartbeat pulse
+      const beat=0.5+0.5*Math.abs(Math.sin(t*2.5));
+      const breathe=1+0.08*Math.sin(t*2.5);
+
+      const sorted=[...cloudPts].map(p=>{
+        const phi=p.phi+t*0.05, th=p.th;
+        const rawR=p.r;
+        // radial distribution: peak at ~0.45R, breathing
+        const peakR=0.45*breathe;
+        const prob=rawR*rawR*Math.exp(-rawR/peakR*2.5);
+        const r=(0.1+rawR*0.9)*R*breathe;
+        const x3=r*Math.sin(th)*Math.cos(phi)+Math.sin(p.seed+t*0.4)*3;
+        const y3=r*Math.cos(th)+Math.cos(p.seed*1.3+t*0.4)*3;
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        const isCyan=p.idx%6===0;
+        // color shift based on density: high density = warmer green, low = cyan
+        const alpha=Math.min(0.85, prob*4+0.04);
+        return{pp,alpha,isCyan,prob,z3:pp.z};
+      }).sort((a,b)=>a.z3-b.z3);
+
+      // pulse glow
+      const grd=ctx.createRadialGradient(cx,cy,0,cx,cy,R*(0.8+0.2*beat));
+      grd.addColorStop(0,`rgba(0,255,100,${0.06*beat})`);
+      grd.addColorStop(0.4,`rgba(0,255,65,${0.03*beat})`);
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle=grd; ctx.fillRect(0,0,W,H);
+
+      sorted.forEach(({pp,alpha,isCyan,prob})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y)||alpha<0.03)return;
+        // color temperature: high prob = bright green, low = cyan
+        const g=Math.floor(200+55*prob*3);
+        const b=Math.floor(65+190*(1-Math.min(1,prob*4)));
+        ctx.fillStyle=isCyan?`rgba(0,220,255,${alpha})`:`rgba(0,${g},${b},${alpha})`;
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      drawNucleus(cx,cy,R,1,1);
+    }
+
+    /* ══════════ MODERN ══════════
+       s + px + py + pz orbitals pulsing alternately */
+    else if(model==='modern'){
+      // orbital phase — each lobe pulses in sequence
+      const phase=t*0.8;
+      const sPulse=0.6+0.4*Math.abs(Math.sin(phase));
+      const pxPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI*0.5));
+      const pyPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI));
+      const pzPulse=0.5+0.5*Math.abs(Math.sin(phase+Math.PI*1.5));
+
+      const allOrbPts=[];
+
+      // s orbital — central sphere
+      cloudPts.slice(0,50).forEach(p=>{
+        const r=p.r*R*0.22;
+        const phi=p.phi+t*0.08,th=p.th;
+        const x3=r*Math.sin(th)*Math.cos(phi);
+        const y3=r*Math.cos(th);
+        const z3=r*Math.sin(th)*Math.sin(phi);
+        const pp=proj(x3,y3,z3,cx,cy,420);
+        allOrbPts.push({pp,alpha:(0.4+0.5*sPulse)*p.r*0.6+0.3,col:`rgba(0,255,120,`,z:pp.z});
+      });
+
+      // p lobes — generate cloud points for each axis
+      const lobes=[
+        {axis:[1,0,0], col:'rgba(0,200,255,', pulse:pxPulse},  // px cyan
+        {axis:[0,1,0], col:'rgba(255,200,0,',  pulse:pyPulse},  // py amber
+        {axis:[0,0,1], col:'rgba(200,80,255,',  pulse:pzPulse},  // pz purple
+      ];
+      lobes.forEach(lobe=>{
+        cloudPts.slice(0,70).forEach(p=>{
+          const r=(0.25+p.r*0.6)*R;
+          // lobe shape: elongated along axis, narrow perpendicular
+          const u=p.phi, v=p.th;
+          const sign=Math.cos(u)>0?1:-1;
+          const [ax,ay,az]=lobe.axis;
+          // main axis component
+          const mainR=r*Math.abs(Math.cos(u));
+          // perp component
+          const perpR=r*0.35*Math.sin(v)*Math.abs(Math.sin(u));
+          // build 2 perp vectors to axis
+          const px2=ay==0&&az==0?0:az, py2=ax==0&&az==0?1:0, pz2=ax==0&&ay==0?0:-ax;
+          const ll=Math.sqrt(px2*px2+py2*py2+pz2*pz2)||1;
+          const x3=sign*ax*mainR + (px2/ll)*perpR;
+          const y3=sign*ay*mainR + (py2/ll)*perpR;
+          const z3=sign*az*mainR + (pz2/ll)*perpR;
+          const pp=proj(x3,y3,z3,cx,cy,420);
+          const alpha=(0.15+0.7*lobe.pulse)*p.r*0.5+0.1;
+          allOrbPts.push({pp,alpha,col:lobe.col,z:pp.z});
+        });
+      });
+
+      allOrbPts.sort((a,b)=>a.z-b.z).forEach(({pp,alpha,col})=>{
+        if(!isFinite(pp.x)||!isFinite(pp.y))return;
+        ctx.fillStyle=col+Math.min(0.9,alpha)+')';
+        ctx.font='10px monospace'; ctx.fillText(rc(GC),pp.x,pp.y);
+      });
+
+      drawNucleus(cx,cy,R,3,3);
+    }
+  } // end loop
+  loop();
+}
+
+function openAtom(model){
+  if(!ATOM_MODELS[model]){print('Unknown model. Type: atom list','le');return;}
+  const pname='atom_'+model;
+
+  // if this exact model already open, just focus it
+  if(panelRegistry[pname]){
+    openPanel(pname);
+    print('> Atom: '+ATOM_MODELS[model]+' (already open)','li');
+    return;
+  }
+
+  // count open atoms
+  const openAtoms=Object.keys(panelRegistry).filter(k=>k.startsWith('atom_'));
+
+  if(openAtoms.length===0){
+    // first atom — register and open fullscreen
+    registerPanel(pname, ATOM_MODELS[model].toUpperCase(), 'closeatom '+model,
+      (body,reg)=>buildAtomContent(model,body,reg),
+      ()=>{const r=panelRegistry[pname];if(r&&r.animId)cancelAnimationFrame(r.animId);}
+    );
+    openPanel(pname);
+    print('> Atom: '+ATOM_MODELS[model],'li');
+    print('  Open a second: atom <model>  then split to view side by side','ld');
+  } else if(openAtoms.length===1){
+    // second atom — register and put in right slot, auto-split
+    registerPanel(pname, ATOM_MODELS[model].toUpperCase(), 'closeatom '+model,
+      (body,reg)=>buildAtomContent(model,body,reg),
+      ()=>{const r=panelRegistry[pname];if(r&&r.animId)cancelAnimationFrame(r.animId);}
+    );
+    // put first atom left, second right
+    slotLeft=openAtoms[0]; slotRight=pname; mode='split';
+    document.getElementById('panel-left').style.width='';
+    document.getElementById('panel-right').style.width='';
+    applyLayout();
+    document.getElementById('btn-split').classList.add('on');
+    print('> Atom: '+ATOM_MODELS[model]+' — split view','li');
+    print('  closeatom '+model+' to close this one','ld');
+  } else {
+    // already two atoms — replace the right one
+    const replName=openAtoms[1]||openAtoms[0];
+    if(panelRegistry[replName]&&panelRegistry[replName].animId) cancelAnimationFrame(panelRegistry[replName].animId);
+    delete panelRegistry[replName];
+    if(slotLeft===replName) slotLeft=null;
+    if(slotRight===replName) slotRight=null;
+    registerPanel(pname, ATOM_MODELS[model].toUpperCase(), 'closeatom '+model,
+      (body,reg)=>buildAtomContent(model,body,reg),
+      ()=>{const r=panelRegistry[pname];if(r&&r.animId)cancelAnimationFrame(r.animId);}
+    );
+    openPanel(pname);
+    print('> Atom: '+ATOM_MODELS[model]+' (replaced previous)','li');
+  }
+}
+
+/* ═══════════════════════
+   OUTPUT
+═══════════════════════ */
+const out=document.getElementById('output');
+const MAX=300;
+function print(text,cls='lo'){const el=document.createElement('div');el.className=cls;el.textContent=text;out.appendChild(el);while(out.children.length>MAX)out.removeChild(out.firstChild);out.scrollTop=out.scrollHeight;}
+function clearOut(){out.innerHTML='';}
+
+/* ═══════════════════════
+   HELPERS
+═══════════════════════ */
+function fmtBytes(b){ if(!b||b<=0)return'0 B'; const u=['B','KB','MB','GB','TB']; let i=0,n=b; while(n>=1024&&i<4){n/=1024;i++;} return n.toFixed(1)+' '+u[i]; }
+function fmtUptime(s){ return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m'; }
+function perfColor(pct){ return pct>85?'#ff4444':pct>60?'#ffcc00':'var(--col)'; }
+
+/* ═══════════════════════
+   FONT SIZE
+═══════════════════════ */
+function applyFontSize(v){
+  localStorage.setItem('mx_fontsize',v);
+  let styleEl=document.getElementById('mx-fontsize-style');
+  if(!styleEl){styleEl=document.createElement('style');styleEl.id='mx-fontsize-style';document.head.appendChild(styleEl);}
+  styleEl.textContent='#output,#cmd,#prompt,#cursor,#input-row,.panel-title,.panel-hint,.tab,#new-tab-btn,#editor-ta,#line-numbers,#editor-status,#tab-bar,.tc,.cl,#ctrl-badge,.panel-header,.dict-result,.dict-input,.slot-tab{font-size:'+v+'px !important;}';
+}
+
+/* ═══════════════════════
+   ZOOM
+═══════════════════════ */
+let currentZoom=parseFloat(localStorage.getItem('mx_zoom')||'1.0');
+
+function applyZoom(factor){
+  currentZoom=Math.min(2.5,Math.max(0.5,Math.round(factor*10)/10));
+  localStorage.setItem('mx_zoom',currentZoom);
+  const root=document.getElementById('root');
+  root.style.transformOrigin='top left';
+  root.style.transform='scale('+currentZoom+')';
+  root.style.width=(100/currentZoom)+'vw';
+  root.style.height=(100/currentZoom)+'vh';
+  const btn=document.getElementById('btn-zoom');
+  if(btn) btn.textContent=Math.round(currentZoom*100)+'%';
+  initBgRain();
+}
+function adjustZoom(delta){applyZoom(currentZoom+delta);}
+function resetZoom(){applyZoom(1.0);}
+
+document.addEventListener('keydown',e=>{
+  if(e.ctrlKey&&(e.key==='='||e.key==='+')){e.preventDefault();adjustZoom(0.1);}
+  if(e.ctrlKey&&e.key==='-'){e.preventDefault();adjustZoom(-0.1);}
+  if(e.ctrlKey&&e.key==='0'){e.preventDefault();resetZoom();}
+});
+
+
+
+/* ═══════════════════════
+   TOOLS
+═══════════════════════ */
+function updatePrompt(){
+  const user=localStorage.getItem('mx_username')||'neo';
+  const el=document.getElementById('prompt');
+  if(el) el.textContent=user+'@matrix:~$ ';
+}
+
+const TOOLS={
+  help(){
+    print('','ld');
+    print('  Matrix Terminal - full command reference','lh');
+    print('  Arrow UP/DOWN for history  |  Ctrl+S in editor to save','ld');
+    print('','ld');
+    [
+      ['LAYOUT & PANELS',''],
+      ['split',              'Toggle split view - current panel left, rain right'],
+      ['flip',               'Swap left and right panel positions  (also Flip button)'],
+      ['focus <panel>',      'Fullscreen a panel  e.g. focus editor  focus rain'],
+      ['front <panel>',      'Bring panel to front slot in split view'],
+      ['panels',             'List all open panels  (also Panels button)'],
+      ['close <name>',       'Close panel by name  e.g. close editor  close bohr  close dict'],
+      ['close all',          'Close all panels - back to rain and terminal'],
+      ['closeall',           'Same as close all'],
+      ['',''],
+      ['TEXT EDITOR',''],
+      ['edit',               'Open text editor panel'],
+      ['edit filename',      'Open or create a named .txt file in a new tab'],
+      ['closedit',           'Close editor  (or click X on editor tab)'],
+      ['',''],
+      ['ATOM MODELS',''],
+      ['atom dalton',        'Dalton (1803) - solid sphere'],
+      ['atom thomson',       'Thomson (1904) - plum pudding'],
+      ['atom rutherford',    'Rutherford (1911) - nuclear, 3 independent orbital planes'],
+      ['atom bohr',          'Bohr (1913) - concentric electron shells'],
+      ['atom quantum',       'Quantum mechanical - breathing probability cloud'],
+      ['atom modern',        'Modern - pulsing s/p orbital lobes in 3D'],
+      ['atom list',          'List all available models'],
+      ['closeatom <model>',  'Close atom by name  e.g. closeatom bohr'],
+      ['',''],
+      ['DICTIONARIES',''],
+      ['opendict',           'Open English dictionary as a panel with GUI'],
+      ['openjisho',          'Open EN to JP and JP to EN dictionary as a panel'],
+      ['define <word>',      'Quick English definition in terminal  e.g. define ephemeral'],
+      ['jisho <word>',       'Quick lookup in terminal  e.g. jisho cat  jisho neko  jisho katakana'],
+      ['',''],
+      ['SYSTEM MONITORING',''],
+      ['sysinfo',            'Open system specs panel  (OS, CPU, RAM, GPU, display, battery)'],
+      ['perf',               'Open live performance monitor  (CPU graph, RAM, storage, network, GPU)'],
+      ['dxdiag',             'Quick system summary in terminal'],
+      ['',''],
+      ['MATH & CONVERSION',''],
+      ['calc <expr>',        'Math expression  e.g. calc 2^10  calc (5+3)*2'],
+      ['conv <n> <f> <t>',   'Unit conversion  e.g. conv 100 km mi  conv 37 c f  conv 5 kg lb'],
+      ['',''],
+      ['ENCODING & HASHING',''],
+      ['b64enc <text>',      'Base64 encode  (b64dec to decode)'],
+      ['hexenc <text>',      'Text to hex  (hexdec to decode)'],
+      ['hash <text>',        'SHA-256 hash'],
+      ['rot13 <text>',       'ROT-13 cipher  (run twice to decode)'],
+      ['',''],
+      ['TEXT TOOLS',''],
+      ['wc <text>',          'Word, character, and line count'],
+      ['rev <text>',         'Reverse text'],
+      ['upper <text>',       'UPPERCASE'],
+      ['lower <text>',       'lowercase'],
+      ['morse <text>',       'Text to morse code  (unmorse to decode)'],
+      ['lorem <n>',          'Generate n lorem ipsum words  e.g. lorem 50'],
+      ['',''],
+      ['RANDOM & DATA',''],
+      ['uuid',               'Random UUID v4'],
+      ['pw <len>',           'Secure random password  e.g. pw 24  (default 16)'],
+      ['rand <min> <max>',   'Random integer  e.g. rand 1 100'],
+      ['coin',               'Flip a coin'],
+      ['dice <NdS>',         'Roll dice  e.g. dice 2d6  dice 1d20'],
+      ['',''],
+      ['NETWORK  (needs internet)',''],
+      ['ip',                 'Public IP, city, ISP, and timezone'],
+      ['weather <city>',     'Live weather  e.g. weather Jakarta'],
+      ['dns <domain>',       'DNS A record lookup  e.g. dns google.com'],
+      ['ports',              'Scan 22 common local ports - open or closed'],
+      ['ports open',         'Only show open ports'],
+      ['ports <number>',     'Check a specific port  e.g. ports 3306'],
+      ['',''],
+      ['DISPLAY & SYSTEM',''],
+      ['zoom <level>',       'Set zoom  e.g. zoom 1.5  (range 0.5 to 2.5, default 1.0)'],
+      ['fontsize <n>',       'Set font size for all UI  e.g. fontsize 14  (range 9 to 22)'],
+      ['time',               'Current date, time, and unix timestamp'],
+      ['timer <seconds>',    'Countdown timer  e.g. timer 60'],
+      ['clear',              'Clear terminal output'],
+      ['rain',               'Toggle rain animation  (also Rain button)'],
+      ['fast',               'Toggle rain speed  (also Fast button)'],
+      ['color',              'Cycle rain color  (also Color button)'],
+      ['exit',               'Close the application'],
+      ['debug',              'Show active animation loops, memory, and panel state'],
+      ['setuser <name>',     'Change terminal username  e.g. setuser morpheus'],
+      ['',''],
+      ['KEYBOARD SHORTCUTS',''],
+      ['Ctrl + =',           'Zoom in'],
+      ['Ctrl + -',           'Zoom out'],
+      ['Ctrl + 0',           'Reset zoom to 100%'],
+      ['Ctrl + S',           'Save current editor tab as .txt'],
+      ['Arrow UP / DOWN',    'Cycle command history'],
+    ].forEach(([cmd,desc])=>{
+      if(!cmd&&!desc){print('','ld');return;}
+      if(!desc){print('  -- '+cmd+' --','lh');return;}
+      print('    '+cmd,'lv');print('      '+desc,'ld');
+    });
+    print('','ld');
+  },
+
+  // Layout
+  split(){cmdSplit();},
+  flip(){cmdFlip();},
+  focus(arg){cmdFocus(arg);},
+  front(arg){cmdFront(arg);},
+  panels(){
+    const popup=document.getElementById('panels-popup');
+    updatePanelsPopup(); popup.classList.toggle('show');
+    const allTabs=[...slotLeftTabs,...slotRightTabs];
+    if(!allTabs.length){print('  No panels open','ld');return;}
+    print('  Open panels:','lh');
+    slotLeftTabs.forEach(n=>print('    LEFT  '+(n===slotLeft?'> ':' ')+n,'lv'));
+    slotRightTabs.forEach(n=>print('    RIGHT '+(n===slotRight?'> ':' ')+n,'lv'));
+    print('  Use: front <name>  or  focus <name>','ld');
+  },
+
+  // Editor
+  edit(arg){
+    if(!panelRegistry['editor']){
+      registerPanel('editor','TEXT EDITOR','ctrl+s to save',buildEditorContent,()=>{});
+    }
+    if(!slotLeftTabs.includes('editor')&&!slotRightTabs.includes('editor')){
+      openPanel('editor');
+    } else {
+      if(slotLeftTabs.includes('editor')) switchSlotTab('left','editor');
+      else switchSlotTab('right','editor');
+    }
+    if(arg){const ex=tabs.find(t=>t.name===arg||t.name===arg+'.txt');if(ex)switchTab(ex.id);else newTab(arg.endsWith('.txt')?arg:arg+'.txt');}
+    else if(tabs.length===0)newTab();
+  },
+  closedit(){
+    if(slotLeftTabs.includes('editor')) closeSlotTab('left','editor');
+    else if(slotRightTabs.includes('editor')) closeSlotTab('right','editor');
+    else { print('Editor not open','le'); return; }
+    print('> Editor closed','li');
+  },
+
+  // Dictionaries
+  opendict(){
+    if(!panelRegistry['dict']) registerPanel('dict','ENGLISH DICTIONARY','define <word>',buildDictPanel,()=>{});
+    openPanel('dict');
+    print('> English Dictionary opened','li');
+  },
+  openjisho(){
+    if(!panelRegistry['jisho']) registerPanel('jisho','EN - JP DICTIONARY','jisho <word>',buildJishoPanel,()=>{});
+    openPanel('jisho');
+    print('> EN-JP Dictionary opened','li');
+  },
+  async define(arg){
+    if(!arg){print('Usage: define <word>','ld');return;}
+    print('> Looking up: '+arg,'ld');
+    try{
+      const data=await(await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(arg))).json();
+      if(!Array.isArray(data)){print('  No results for "'+arg+'"','ld');return;}
+      const e=data[0];
+      const ph=e.phonetics&&e.phonetics.find(p=>p.text)?e.phonetics.find(p=>p.text).text:'';
+      print('  '+e.word+(ph?' '+ph:''),'lv');
+      (e.meanings||[]).slice(0,3).forEach(m=>{
+        print('  ['+m.partOfSpeech+']','li');
+        (m.definitions||[]).slice(0,2).forEach((d,i)=>{
+          print('    '+(i+1)+'. '+d.definition,'lo');
+          if(d.example)print('       "'+d.example+'"','ld');
+        });
+      });
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async jisho(arg){
+    if(!arg){print('Usage: jisho <word or Japanese>','ld');return;}
+    print('> Jisho: '+arg,'ld');
+    try{
+      const data=await(await fetch('https://jisho.org/api/v1/search/words?keyword='+encodeURIComponent(arg))).json();
+      const words=data&&data.data?data.data:[];
+      if(!words.length){print('  No results for "'+arg+'"','ld');return;}
+      words.slice(0,3).forEach(entry=>{
+        const jp=entry.japanese&&entry.japanese[0];
+        const word=jp?(jp.word||jp.reading||'?'):'?';
+        const reading=jp&&jp.word&&jp.reading?' ('+jp.reading+')':'';
+        const jlpt=(entry.jlpt||[]).join(' ');
+        print('  '+word+reading+(jlpt?' - '+jlpt.toUpperCase():''),'lv');
+        (entry.senses||[]).slice(0,2).forEach((s,i)=>{
+          print('    '+(i+1)+'. '+(s.english_definitions||[]).join(', '),'lo');
+        });
+      });
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+
+  // Sysinfo & Perf
+  sysinfo(){
+    registerPanel('sysinfo','SYSTEM INFO','close sysinfo',buildSysinfoPanel,()=>{});
+    openPanel('sysinfo');
+    print('> System Info panel opened','li');
+  },
+  perf(){
+    registerPanel('perf','PERFORMANCE','close perf',buildPerfPanel,(reg)=>{
+      if(window.electronAPI){ window.electronAPI.stopPerf(); window.electronAPI.removePerfListeners(); }
+    });
+    openPanel('perf');
+    print('> Performance monitor opened  (live, updates every 2s)','li');
+  },
+  async dxdiag(){
+    if(!window.electronAPI){ print('dxdiag requires Electron runtime','le'); return; }
+    print('> Fetching system info...','ld');
+    try {
+      const d=await window.electronAPI.getSysinfo();
+      if(!d.ok){ print('Error: '+d.error,'le'); print('Run: npm install systeminformation --save','ld'); return; }
+      print('','ld');
+      print('  -- SYSTEM --','lh');
+      print('  OS:     '+d.os.distro+' '+d.os.release+' ('+d.os.arch+')','lv');
+      print('  Host:   '+d.os.hostname+'   User: '+d.os.username,'lo');
+      print('  Uptime: '+fmtUptime(d.os.uptime),'lo');
+      print('','ld');
+      print('  -- CPU --','lh');
+      print('  '+d.cpu.brand,'lv');
+      print('  '+d.cpu.physicalCores+' cores / '+d.cpu.cores+' threads @ '+d.cpu.speed+' GHz','lo');
+      print('','ld');
+      print('  -- MEMORY --','lh');
+      print('  Total: '+fmtBytes(d.mem.total)+'   Used: '+fmtBytes(d.mem.used)+'   Free: '+fmtBytes(d.mem.free),'lv');
+      print('','ld');
+      if(d.gpu&&d.gpu.length){
+        print('  -- GPU --','lh');
+        d.gpu.forEach(g=>print('  '+g.model+(g.vram?' - '+g.vram+' MB VRAM':''),'lv'));
+        print('','ld');
+      }
+      if(d.displays&&d.displays.length){
+        print('  -- DISPLAY --','lh');
+        d.displays.forEach(dp=>print('  '+dp.resolutionX+'x'+dp.resolutionY+(dp.currentRefreshRate?' @ '+dp.currentRefreshRate+'Hz':''),'lv'));
+        print('','ld');
+      }
+      if(d.battery&&d.battery.hasBattery){
+        print('  -- BATTERY --','lh');
+        print('  '+d.battery.percent+'%'+(d.battery.isCharging?' (charging)':''),'lv');
+      }
+    } catch(e){ print('Error: '+e.message,'le'); }
+  },
+
+  // Close commands
+  close(arg){
+    if(!arg){print('Usage: close <panel>  e.g. close editor  close bohr  close all','ld');return;}
+    const a=arg.trim().toLowerCase();
+    if(a==='all'||a==='everything'){ TOOLS.closeall(); return; }
+    let name=a;
+    if(a==='editor'||a==='edit') name='editor';
+    else if([...slotLeftTabs,...slotRightTabs].includes('atom_'+a)) name='atom_'+a;
+    else {
+      const match=[...slotLeftTabs,...slotRightTabs].find(k=>k.includes(a));
+      if(match) name=match;
+    }
+    if(slotLeftTabs.includes(name)){ closeSlotTab('left',name); print('> Closed: '+name,'li'); }
+    else if(slotRightTabs.includes(name)){ closeSlotTab('right',name); print('> Closed: '+name,'li'); }
+    else print('Panel not found: '+a+'  (type panels to list open panels)','le');
+  },
+  closeall(){
+    const allTabs=[...slotLeftTabs,...slotRightTabs];
+    if(!allTabs.length){ print('No panels open','ld'); return; }
+    allTabs.forEach(name=>{
+      const reg=panelRegistry[name];
+      if(reg){ if(reg.animId)cancelAnimationFrame(reg.animId); if(reg.destroyFn)reg.destroyFn(reg); delete panelRegistry[name]; }
+    });
+    stopSlotAnim('left'); stopSlotAnim('right');
+    slotLeft=null; slotRight=null;
+    slotLeftTabs=[]; slotRightTabs=[];
+    mode='none'; lastAddedSide=null;
+    document.getElementById('panel-left').style.width='';
+    document.getElementById('panel-right').style.width='';
+    applyLayout();
+    document.getElementById('btn-split').classList.remove('on');
+    updatePanelsPopup();
+    print('> All panels closed','li');
+    if(window.electronAPI){ window.electronAPI.stopPerf(); window.electronAPI.removePerfListeners(); }
+  },
+  closeatom(arg){
+    let name;
+    if(arg) name='atom_'+arg.trim().toLowerCase();
+    else name=[...slotLeftTabs,...slotRightTabs].find(k=>k.startsWith('atom_'));
+    if(!name){ print('No atom panel open','le'); return; }
+    if(slotLeftTabs.includes(name)) closeSlotTab('left',name);
+    else if(slotRightTabs.includes(name)) closeSlotTab('right',name);
+    else print('Atom "'+arg+'" is not open','le');
+    print('> Atom closed: '+(arg||name),'li');
+  },
+
+  // Atom
+  atom(arg){
+    if(!arg||arg==='list'){
+      print('  Available models:','lh');
+      Object.entries(ATOM_MODELS).forEach(([k,v])=>print('    atom '+k+' - '+v,'lv'));
+      return;
+    }
+    openAtom(arg.trim().toLowerCase());
+  },
+
+  // Math
+  calc(arg){
+    if(!arg){print('Usage: calc <expression>','le');return;}
+    try{ print('  '+arg+' = '+Function('"use strict";return ('+arg.replace(/\^/g,'**')+')')(),'lv'); }
+    catch{ print('  Invalid expression','le'); }
+  },
+  conv(arg){
+    const p=(arg||'').trim().split(/\s+/);
+    if(p.length<3||isNaN(+p[0])){print('Usage: conv <value> <from> <to>','le');return;}
+    const n=+p[0],fr=p[1].toLowerCase(),to=p[2].toLowerCase();
+    const pairs={'km-mi':v=>v*.621371,'mi-km':v=>v*1.60934,'m-ft':v=>v*3.28084,'ft-m':v=>v/3.28084,'kg-lb':v=>v*2.20462,'lb-kg':v=>v/2.20462,'g-oz':v=>v*.035274,'oz-g':v=>v/.035274,'l-gal':v=>v*.264172,'gal-l':v=>v/.264172,'c-f':v=>v*9/5+32,'f-c':v=>(v-32)*5/9,'c-k':v=>v+273.15,'k-c':v=>v-273.15,'in-cm':v=>v*2.54,'cm-in':v=>v/2.54,'mph-kmh':v=>v*1.60934,'kmh-mph':v=>v*.621371};
+    const fn=pairs[fr+'-'+to];
+    if(!fn){print('Unknown: '+fr+' to '+to,'le');return;}
+    print('  '+n+' '+fr+' = '+fn(n).toFixed(4)+' '+to,'lv');
+  },
+
+  // Encoding
+  b64enc(a){if(!a){print('Usage: b64enc <text>','le');return;}print('  '+btoa(unescape(encodeURIComponent(a))),'lv');},
+  b64dec(a){if(!a){print('Usage: b64dec <text>','le');return;}try{print('  '+decodeURIComponent(escape(atob(a))),'lv');}catch{print('Invalid base64','le');}},
+  hexenc(a){if(!a){print('Usage: hexenc <text>','le');return;}print('  '+[...a].map(c=>c.charCodeAt(0).toString(16).padStart(2,'0')).join(' '),'lv');},
+  hexdec(a){if(!a){print('Usage: hexdec <hex>','le');return;}try{print('  '+a.replace(/\s/g,'').match(/.{1,2}/g).map(h=>String.fromCharCode(parseInt(h,16))).join(''),'lv');}catch{print('Invalid hex','le');}},
+  rot13(a){if(!a){print('Usage: rot13 <text>','le');return;}print('  '+a.replace(/[a-zA-Z]/g,c=>{const b=c<='Z'?65:97;return String.fromCharCode((c.charCodeAt(0)-b+13)%26+b);}),'lv');},
+  async hash(a){if(!a){print('Usage: hash <text>','le');return;}const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(a));print('  '+[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join(''),'lv');},
+
+  // Text
+  wc(a){if(!a){print('Usage: wc <text>','le');return;}print('  Words:'+a.trim().split(/\s+/).filter(Boolean).length+'  Chars:'+a.length+'  Lines:'+a.split('\n').length,'lv');},
+  rev(a){if(!a){print('Usage: rev <text>','le');return;}print('  '+[...a].reverse().join(''),'lv');},
+  upper(a){if(!a){print('Usage: upper <text>','le');return;}print('  '+a.toUpperCase(),'lv');},
+  lower(a){if(!a){print('Usage: lower <text>','le');return;}print('  '+a.toLowerCase(),'lv');},
+  morse(a){
+    if(!a){print('Usage: morse <text>','le');return;}
+    const M={A:'.-',B:'-...',C:'-.-.',D:'-..',E:'.',F:'..-.',G:'--.',H:'....',I:'..',J:'.---',K:'-.-',L:'.-..',M:'--',N:'-.',O:'---',P:'.--.',Q:'--.-',R:'.-.',S:'...',T:'-',U:'..-',V:'...-',W:'.--',X:'-..-',Y:'-.--',Z:'--..',0:'-----',1:'.----',2:'..---',3:'...--',4:'....-',5:'.....',6:'-....',7:'--...',8:'---..',9:'----.',' ':'/'};
+    print('  '+a.toUpperCase().split('').map(c=>M[c]||'?').join(' '),'lv');
+  },
+  unmorse(a){
+    if(!a){print('Usage: unmorse <code>','le');return;}
+    const M={'.-':'A','-...':'B','-.-.':'C','-..':'D','.':'E','..-.':'F','--.':'G','....':'H','..':'I','.---':'J','-.-':'K','.-..':'L','--':'M','-.':'N','---':'O','.--.':'P','--.-':'Q','.-.':'R','...':'S','-':'T','..-':'U','...-':'V','.--':'W','-..-':'X','-.--':'Y','--..':'Z','-----':'0','.----':'1','..---':'2','...--':'3','....-':'4','.....':'5','-....':'6','--...':'7','---..':'8','----.':'9','/':' '};
+    print('  '+a.split(' ').map(c=>M[c]||'?').join(''),'lv');
+  },
+  lorem(a){const n=parseInt(a)||20;const p='lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua enim ad minim veniam quis nostrud exercitation ullamco laboris'.split(' ');const w=Array.from({length:n},(_,i)=>p[i%p.length]);w[0]=w[0][0].toUpperCase()+w[0].slice(1);print('  '+w.join(' ')+'.','lv');},
+
+  // Random
+  uuid(){print('  '+'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=crypto.getRandomValues(new Uint8Array(1))[0]&15,v=c==='x'?r:(r&0x3|0x8);return v.toString(16);}),'lv');},
+  pw(a){const l=Math.min(Math.max(parseInt(a)||16,4),128);const ch='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+[]{}|;:,.?';const ar=crypto.getRandomValues(new Uint8Array(l));print('  '+[...ar].map(b=>ch[b%ch.length]).join(''),'lv');print('  ('+l+' chars, cryptographically random)','ld');},
+  rand(a){const p=(a||'').trim().split(/\s+/);if(p.length<2||isNaN(+p[0])||isNaN(+p[1])){print('Usage: rand <min> <max>','le');return;}print('  '+(Math.floor(crypto.getRandomValues(new Uint32Array(1))[0]/(2**32)*(+p[1]-+p[0]+1))+ +p[0]),'lv');},
+  coin(){print('  '+(Math.random()<.5?'HEADS':'TAILS'),'lv');},
+  dice(a){const m=(a||'1d6').match(/^(\d+)d(\d+)$/i);if(!m){print('Usage: dice NdS','le');return;}const r=Array.from({length:+m[1]},()=>Math.floor(Math.random()*+m[2])+1);print('  ['+r.join(', ')+']  Total: '+r.reduce((a,b)=>a+b,0),'lv');},
+
+  // Network
+  async ip(){
+    print('> Fetching IP...','ld');
+    try{const d=await(await fetch('http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,org,timezone,query')).json();
+    if(d.status==='fail'){print('  Error: '+d.message,'le');return;}
+    print('  IP:       '+d.query,'lv');print('  City:     '+d.city+', '+d.regionName);print('  Country:  '+d.country);print('  ISP:      '+d.isp);print('  Timezone: '+d.timezone);}
+    catch(e){print('  Error: '+e.message,'le');}
+  },
+  async weather(a){
+    if(!a){print('Usage: weather <city>','le');return;}
+    print('> Weather: '+a+'...','ld');
+    try{
+      const g=await(await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(a)+'&count=1')).json();
+      if(!g.results||!g.results.length){print('  City not found','le');return;}
+      const loc=g.results[0];
+      const w=await(await fetch('https://api.open-meteo.com/v1/forecast?latitude='+loc.latitude+'&longitude='+loc.longitude+'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&wind_speed_unit=kmh')).json();
+      const c=w.current;
+      const cd={0:'Clear',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',61:'Light rain',63:'Rain',65:'Heavy rain',71:'Snow',80:'Showers',95:'Thunderstorm'};
+      print('  '+loc.name+', '+loc.country,'lv');
+      print('  '+(cd[c.weather_code]||'Code '+c.weather_code));
+      print('  Temp: '+c.temperature_2m+'C  Humidity: '+c.relative_humidity_2m+'%  Wind: '+c.wind_speed_10m+' km/h');
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async dns(a){
+    if(!a){print('Usage: dns <domain>','le');return;}
+    print('> DNS: '+a,'ld');
+    try{const d=await(await fetch('https://dns.google/resolve?name='+encodeURIComponent(a)+'&type=A')).json();
+    if(!d.Answer||!d.Answer.length){print('  No A records','le');return;}
+    d.Answer.forEach(r=>print('  '+r.name.padEnd(36)+'A  '+r.data+'  TTL:'+r.TTL,'lv'));}
+    catch(e){print('  Error: '+e.message,'le');}
+  },
+  async ports(arg){
+    const COMMON=[{port:21,proto:'TCP',service:'FTP',desc:'File Transfer'},{port:22,proto:'TCP',service:'SSH',desc:'Secure Shell'},{port:23,proto:'TCP',service:'Telnet',desc:'Telnet'},{port:25,proto:'TCP',service:'SMTP',desc:'Email'},{port:53,proto:'UDP',service:'DNS',desc:'Domain Name'},{port:80,proto:'TCP',service:'HTTP',desc:'Web traffic'},{port:110,proto:'TCP',service:'POP3',desc:'Email retrieval'},{port:135,proto:'TCP',service:'RPC',desc:'Windows RPC'},{port:139,proto:'TCP',service:'NetBIOS',desc:'File sharing'},{port:143,proto:'TCP',service:'IMAP',desc:'Email modern'},{port:443,proto:'TCP',service:'HTTPS',desc:'Secure web'},{port:445,proto:'TCP',service:'SMB',desc:'File/printer'},{port:1433,proto:'TCP',service:'MSSQL',desc:'SQL Server'},{port:3306,proto:'TCP',service:'MySQL',desc:'MySQL'},{port:3389,proto:'TCP',service:'RDP',desc:'Remote Desktop'},{port:5432,proto:'TCP',service:'PostgreSQL',desc:'PostgreSQL'},{port:5900,proto:'TCP',service:'VNC',desc:'Virtual Network'},{port:6379,proto:'TCP',service:'Redis',desc:'Redis'},{port:7680,proto:'TCP',service:'WUDO',desc:'Windows Update'},{port:8080,proto:'TCP',service:'HTTP-Alt',desc:'Dev HTTP'},{port:8443,proto:'TCP',service:'HTTPS-Alt',desc:'Alt HTTPS'},{port:27017,proto:'TCP',service:'MongoDB',desc:'MongoDB'}];
+    const filter=(arg||'').trim().toLowerCase();
+    async function probe(port){return new Promise(resolve=>{const ctrl=new AbortController();const timer=setTimeout(()=>{ctrl.abort();resolve(false);},800);fetch('http://127.0.0.1:'+port,{signal:ctrl.signal,mode:'no-cors'}).then(()=>{clearTimeout(timer);resolve(true);}).catch(err=>{clearTimeout(timer);resolve(err.name!=='AbortError'&&!err.message.includes('refused')&&!err.message.includes('abort'));});});}
+    let list=COMMON;
+    if(!isNaN(+filter)&&filter!==''){const p=COMMON.find(x=>x.port===+filter);list=p?[p]:[{port:+filter,proto:'TCP',service:'Custom',desc:'User-specified'}];}
+    print('> Scanning ports...','ld');
+    const results=[];for(const e of list){const open=await probe(e.port);results.push({...e,open});}
+    const toShow=filter==='open'?results.filter(r=>r.open):results;
+    if(!toShow.length){print('  No open ports found','ld');return;}
+    const tbl=document.createElement('div');tbl.style.cssText='padding:6px 16px;font:12px/1.8 "Courier New",monospace;';
+    const mkRow=(cells,colors,bold)=>{const row=document.createElement('div');row.style.cssText='display:grid;grid-template-columns:58px 52px 88px 120px 1fr;';cells.forEach((cell,i)=>{const s=document.createElement('span');s.textContent=cell;s.style.color=Array.isArray(colors)?colors[i]:colors;if(bold)s.style.fontWeight='bold';row.appendChild(s);});return row;};
+    tbl.appendChild(mkRow(['PORT','PROTO','STATUS','SERVICE','DESCRIPTION'],'#00ccff',true));
+    const dv=document.createElement('div');dv.style.cssText='border-bottom:1px solid rgba(0,255,65,0.2);margin:2px 0 4px;';tbl.appendChild(dv);
+    toShow.forEach(r=>{const c=r.open?'var(--col)':'rgba(0,255,65,0.3)';tbl.appendChild(mkRow([r.port,r.proto,r.open?'OPEN':'closed',r.service,r.desc],c,false));});
+    out.appendChild(tbl);while(out.children.length>MAX)out.removeChild(out.firstChild);out.scrollTop=out.scrollHeight;
+  },
+
+  // System
+  time(){const n=new Date();print('  '+n.toDateString()+'  '+n.toTimeString().split(' ')[0],'lv');print('  Unix: '+Math.floor(Date.now()/1000)+'  UTC: '+n.toUTCString(),'ld');},
+  async timer(a){if(!a||isNaN(+a)||+a<=0){print('Usage: timer <seconds>','le');return;}const s=+a;print('> Timer: '+s+'s','li');const el=document.createElement('div');el.className='ld';el.textContent='  '+s+'s remaining...';out.appendChild(el);out.scrollTop=out.scrollHeight;for(let i=s-1;i>=0;i--){await new Promise(r=>setTimeout(r,1000));el.textContent=i===0?'  Done!':'  '+i+'s remaining...';if(i===0)el.className='li';}},
+
+  // Network commands
+  async ip(){
+    print('> Fetching IP...','ld');
+    try{
+      const d=await(await fetch('http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,timezone,query')).json();
+      if(d.status==='fail'){print('  Error: '+d.message,'le');return;}
+      print('  IP:       '+d.query,'lv');
+      print('  City:     '+d.city+', '+d.regionName,'lo');
+      print('  Country:  '+d.country,'lo');
+      print('  ISP:      '+d.isp,'lo');
+      print('  Timezone: '+d.timezone,'lo');
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async weather(arg){
+    if(!arg){print('Usage: weather <city>','le');return;}
+    print('> Weather: '+arg+'...','ld');
+    try{
+      const g=await(await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(arg)+'&count=1')).json();
+      if(!g.results||!g.results.length){print('  City not found','le');return;}
+      const loc=g.results[0];
+      const w=await(await fetch('https://api.open-meteo.com/v1/forecast?latitude='+loc.latitude+'&longitude='+loc.longitude+'&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&wind_speed_unit=kmh')).json();
+      const c=w.current;
+      const cd={0:'Clear',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',61:'Light rain',63:'Rain',65:'Heavy rain',71:'Snow',80:'Showers',95:'Thunderstorm'};
+      print('  '+loc.name+', '+loc.country,'lv');
+      print('  '+(cd[c.weather_code]||'Code '+c.weather_code),'lo');
+      print('  Temp: '+c.temperature_2m+'C  Humidity: '+c.relative_humidity_2m+'%  Wind: '+c.wind_speed_10m+' km/h','lo');
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async dns(arg){
+    if(!arg){print('Usage: dns <domain>','le');return;}
+    print('> DNS: '+arg,'ld');
+    try{
+      const d=await(await fetch('https://dns.google/resolve?name='+encodeURIComponent(arg)+'&type=A')).json();
+      if(!d.Answer||!d.Answer.length){print('  No A records found','le');return;}
+      d.Answer.forEach(r=>print('  '+r.name.padEnd(36)+'A  '+r.data+'  TTL:'+r.TTL,'lv'));
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async ports(arg){
+    const COMMON=[
+      {port:21,service:'FTP'},{port:22,service:'SSH'},{port:23,service:'Telnet'},
+      {port:25,service:'SMTP'},{port:53,service:'DNS'},{port:80,service:'HTTP'},
+      {port:110,service:'POP3'},{port:135,service:'RPC'},{port:139,service:'NetBIOS'},
+      {port:143,service:'IMAP'},{port:443,service:'HTTPS'},{port:445,service:'SMB'},
+      {port:1433,service:'MSSQL'},{port:3306,service:'MySQL'},{port:3389,service:'RDP'},
+      {port:5432,service:'PostgreSQL'},{port:5900,service:'VNC'},{port:6379,service:'Redis'},
+      {port:7680,service:'WUDO'},{port:8080,service:'HTTP-Alt'},{port:8443,service:'HTTPS-Alt'},
+      {port:27017,service:'MongoDB'}
+    ];
+    const filter=(arg||'').trim().toLowerCase();
+    async function probe(port){return new Promise(resolve=>{const ctrl=new AbortController();const timer=setTimeout(()=>{ctrl.abort();resolve(false);},800);fetch('http://127.0.0.1:'+port,{signal:ctrl.signal,mode:'no-cors'}).then(()=>{clearTimeout(timer);resolve(true);}).catch(err=>{clearTimeout(timer);resolve(err.name!=='AbortError'&&!err.message.includes('refused')&&!err.message.includes('abort'));});});}
+    let list=COMMON;
+    if(!isNaN(+filter)&&filter!==''){const p=COMMON.find(x=>x.port===+filter);list=p?[p]:[{port:+filter,service:'Custom'}];}
+    print('> Scanning ports...','ld');
+    const results=[];
+    for(const e of list){const open=await probe(e.port);results.push({...e,open});}
+    const toShow=filter==='open'?results.filter(r=>r.open):results;
+    if(!toShow.length){print('  No open ports found','ld');return;}
+    toShow.forEach(r=>{
+      const status=r.open?'OPEN  ':'closed';
+      const col=r.open?'lv':'ld';
+      print('  '+String(r.port).padEnd(6)+status+'  '+r.service,col);
+    });
+  },
+
+  // Hash
+  async hash(arg){
+    if(!arg){print('Usage: hash <text>','le');return;}
+    const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(arg));
+    print('  '+[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join(''),'lv');
+  },
+
+  // Timer
+  async timer(arg){
+    if(!arg||isNaN(+arg)||+arg<=0){print('Usage: timer <seconds>','le');return;}
+    const s=+arg; print('> Timer: '+s+'s','li');
+    const el=document.createElement('div'); el.className='ld'; el.textContent='  '+s+'s remaining...';
+    out.appendChild(el); out.scrollTop=out.scrollHeight;
+    for(let i=s-1;i>=0;i--){
+      await new Promise(r=>setTimeout(r,1000));
+      el.textContent=i===0?'  Done!':'  '+i+'s remaining...';
+      if(i===0)el.className='li';
+    }
+  },
+
+  // dxdiag
+  async dxdiag(){
+    if(!window.electronAPI){print('dxdiag requires Electron runtime','le');return;}
+    print('> Fetching system info...','ld');
+    try{
+      const d=await window.electronAPI.getSysinfo();
+      if(!d.ok){print('Error: '+d.error,'le');print('Run: npm install systeminformation --save','ld');return;}
+      print('','ld');
+      print('  -- SYSTEM --','lh');
+      print('  OS:     '+d.os.distro+' '+d.os.release+' ('+d.os.arch+')','lv');
+      print('  Host:   '+d.os.hostname+'   User: '+d.os.username,'lo');
+      print('  Uptime: '+fmtUptime(d.os.uptime),'lo');
+      print('','ld');
+      print('  -- CPU --','lh');
+      print('  '+d.cpu.brand,'lv');
+      print('  '+d.cpu.physicalCores+' cores / '+d.cpu.cores+' threads @ '+d.cpu.speed+' GHz','lo');
+      print('','ld');
+      print('  -- MEMORY --','lh');
+      print('  Total: '+fmtBytes(d.mem.total)+'   Used: '+fmtBytes(d.mem.used)+'   Free: '+fmtBytes(d.mem.free),'lv');
+      print('','ld');
+      if(d.gpu&&d.gpu.length){print('  -- GPU --','lh');d.gpu.forEach(g=>print('  '+g.model+(g.vram?' - '+g.vram+' MB VRAM':''),'lv'));print('','ld');}
+      if(d.displays&&d.displays.length){print('  -- DISPLAY --','lh');d.displays.forEach(dp=>print('  '+dp.resolutionX+'x'+dp.resolutionY+(dp.currentRefreshRate?' @ '+dp.currentRefreshRate+'Hz':''),'lv'));print('','ld');}
+      if(d.battery&&d.battery.hasBattery){print('  -- BATTERY --','lh');print('  '+d.battery.percent+'%'+(d.battery.isCharging?' (charging)':''),'lv');}
+    }catch(e){print('Error: '+e.message,'le');}
+  },
+
+  // Quick dictionary terminal commands
+  async define(arg){
+    if(!arg){print('Usage: define <word>','ld');return;}
+    print('> Looking up: '+arg,'ld');
+    try{
+      const data=await(await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(arg))).json();
+      if(!Array.isArray(data)){print('  No results for "'+arg+'"','ld');return;}
+      const e=data[0];
+      const ph=e.phonetics?.find(p=>p.text)?.text||'';
+      print('  '+e.word+(ph?' '+ph:''),'lv');
+      (e.meanings||[]).slice(0,3).forEach(m=>{
+        print('  ['+m.partOfSpeech+']','li');
+        (m.definitions||[]).slice(0,2).forEach((d,i)=>{
+          print('    '+(i+1)+'. '+d.definition,'lo');
+          if(d.example)print('       "'+d.example+'"','ld');
+        });
+      });
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+  async jisho(arg){
+    if(!arg){print('Usage: jisho <word or Japanese>','ld');return;}
+    print('> Jisho: '+arg,'ld');
+    try{
+      const data=await(await fetch('https://jisho.org/api/v1/search/words?keyword='+encodeURIComponent(arg))).json();
+      const words=data?.data||[];
+      if(!words.length){print('  No results for "'+arg+'"','ld');return;}
+      words.slice(0,3).forEach(entry=>{
+        const jp=entry.japanese?.[0];
+        const word=jp?(jp.word||jp.reading||'?'):'?';
+        const reading=jp&&jp.word&&jp.reading?' ('+jp.reading+')':'';
+        const jlpt=(entry.jlpt||[]).join(' ');
+        print('  '+word+reading+(jlpt?' - '+jlpt.toUpperCase():''),'lv');
+        (entry.senses||[]).slice(0,2).forEach((s,i)=>{
+          print('    '+(i+1)+'. '+(s.english_definitions||[]).join(', '),'lo');
+        });
+      });
+    }catch(e){print('  Error: '+e.message,'le');}
+  },
+
+  zoom(arg){
+    if(!arg){const cur=localStorage.getItem('mx_zoom')||'1.0';print('Current zoom: '+Math.round(parseFloat(cur)*100)+'%  Usage: zoom <level>  (0.5-2.5)','ld');return;}
+    const v=parseFloat(arg);
+    if(isNaN(v)||v<0.5||v>2.5){print('Zoom must be between 0.5 and 2.5','le');return;}
+    applyZoom(v);
+    print('> Zoom: '+Math.round(v*100)+'%','li');
+  },
+  fontsize(arg){
+    if(!arg){const cur=localStorage.getItem('mx_fontsize')||'13';print('Current font size: '+cur+'px  Usage: fontsize <size>  (9-22)','ld');return;}
+    const v=parseInt(arg);
+    if(isNaN(v)||v<9||v>22){print('Font size must be between 9 and 22','le');return;}
+    applyFontSize(v);
+    print('> Font size: '+v+'px','li');
+  },
+  clear(){clearOut();},
+  rain(){toggleRain();print(rainOn?'Rain ON':'Rain OFF','li');},
+  fast(){toggleSpeed();print(fast?'Speed FAST':'Speed NORMAL','li');},
+  color(){cycleColor();print('Color: '+CNAMES[colorIdx],'li');},
+  setuser(arg){
+    if(!arg){
+      const cur=localStorage.getItem('mx_username')||'neo';
+      print('Current user: '+cur+'  Usage: setuser <name>','ld');
+      return;
+    }
+    const name=arg.trim().replace(/[^a-zA-Z0-9_-]/g,'').slice(0,20);
+    if(!name){print('Invalid name — use letters, numbers, - and _ only','le');return;}
+    localStorage.setItem('mx_username',name);
+    updatePrompt();
+    print('> Username set to: '+name,'li');
+  },
+  exit(){print('> Disconnecting...','li');setTimeout(()=>window.close(),800);},
+
+  debug(){
+    print('','ld');
+    print('  -- ANIMATION LOOPS --','lh');
+    print('  Active named loops: '+loopCount()+' ['+loopList().join(', ')+']','lv');
+    print('  slotLeft:  '+(slotLeft||'none'),'lo');
+    print('  slotRight: '+(slotRight||'none'),'lo');
+    print('  leftTabs:  ['+slotLeftTabs.join(', ')+']','lo');
+    print('  rightTabs: ['+slotRightTabs.join(', ')+']','lo');
+    print('  mode:      '+mode,'lo');
+    print('  lastAddedSide: '+lastAddedSide,'lo');
+    print('','ld');
+    print('  -- PANEL REGISTRY --','lh');
+    const keys=Object.keys(panelRegistry);
+    if(!keys.length) print('  empty','ld');
+    keys.forEach(k=>{
+      const r=panelRegistry[k];
+      print('  '+k+' animId:'+(r.animId||'none'),'lo');
+    });
+    print('','ld');
+    print('  -- SLOT ANIMS --','lh');
+    print('  left:  '+(slotAnims.left||'none'),'lo');
+    print('  right: '+(slotAnims.right||'none'),'lo');
+    print('','ld');
+    print('  -- MEMORY --','lh');
+    if(window.performance&&window.performance.memory){
+      const m=window.performance.memory;
+      print('  JS heap used:  '+Math.round(m.usedJSHeapSize/1024/1024)+' MB','lv');
+      print('  JS heap total: '+Math.round(m.totalJSHeapSize/1024/1024)+' MB','lo');
+      print('  JS heap limit: '+Math.round(m.jsHeapSizeLimit/1024/1024)+' MB','ld');
+    } else {
+      print('  memory API not available','ld');
+    }
+    print('','ld');
+    print('  -- OUTPUT --','lh');
+    print('  Terminal lines: '+out.children.length+'/'+MAX,'lo');
+    print('','ld');
+    print('  -- RAIN --','lh');
+    print('  bgRain running: '+rainOn,'lo');
+    print('  Cols: '+bcols,'lo');
+    print('  Drop max: '+Math.max(...bdrops).toFixed(0)+'  (should stay bounded)','lo');
+    print('','ld');
+    // Fix: reset any drops that have grown too large
+    const threshold = BH/14 + 10;
+    let fixed=0;
+    for(let i=0;i<bdrops.length;i++){
+      if(bdrops[i]>threshold*2){ bdrops[i]=0; fixed++; }
+    }
+    if(fixed>0) print('  Fixed '+fixed+' unbounded rain drops','li');
+  },
+};
+
+/* ═══════════════════════
+   INPUT
+═══════════════════════ */
+const cmdHistory=[]; let histIdx=-1;
+const cmdEl=document.getElementById('cmd');
+cmdEl.addEventListener('keydown',async e=>{
+  if(e.key==='ArrowUp'){e.preventDefault();if(histIdx<cmdHistory.length-1){histIdx++;cmdEl.value=cmdHistory[cmdHistory.length-1-histIdx];}return;}
+  if(e.key==='ArrowDown'){e.preventDefault();if(histIdx>0){histIdx--;cmdEl.value=cmdHistory[cmdHistory.length-1-histIdx];}else{histIdx=-1;cmdEl.value='';}return;}
+  if(e.key!=='Enter')return;
+  const raw=cmdEl.value.trim(); if(!raw)return;
+  cmdHistory.push(raw); histIdx=-1; cmdEl.value='';
+  print((localStorage.getItem('mx_username')||'neo')+'@matrix:~$ '+raw,'lu');
+  const parts=raw.split(/\s+/), verb=parts[0].toLowerCase(), arg=parts.slice(1).join(' ');
+  if(TOOLS[verb]) await TOOLS[verb](arg);
+  else print('command not found: '+verb+'  (type help)','le');
+});
+
+/* ═══════════════════════
+   SYSINFO PANEL
+═══════════════════════ */
+function buildSysinfoPanel(body, reg){
+  const wrap=document.createElement('div');
+  wrap.style.cssText='display:flex;flex-direction:column;height:100%;overflow-y:auto;padding:12px 16px;gap:12px;font:12px/1.6 "Courier New",monospace;color:var(--col);';
+  wrap.innerHTML='<div style="opacity:.4">Loading system information...</div>';
+  body.appendChild(wrap);
+  if(!window.electronAPI){ wrap.innerHTML='<div style="opacity:.4">Run inside Electron to see system info.</div>'; return; }
+  function section(title,rows){
+    const sec=document.createElement('div');
+    sec.style.cssText='border:1px solid rgba(0,255,65,.15);padding:8px 12px;border-radius:2px;';
+    const t=document.createElement('div');
+    t.style.cssText='color:#00ccff;font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;border-bottom:1px solid rgba(0,255,65,.1);padding-bottom:3px;';
+    t.textContent=title; sec.appendChild(t);
+    rows.forEach(([k,v,col])=>{
+      const row=document.createElement('div'); row.style.cssText='display:flex;justify-content:space-between;padding:1px 0;';
+      const key=document.createElement('span'); key.style.cssText='opacity:.5;font-size:11px;'; key.textContent=k;
+      const val=document.createElement('span'); val.style.cssText='font-weight:bold;color:'+(col||'var(--col)')+';text-align:right;'; val.textContent=v;
+      row.appendChild(key); row.appendChild(val); sec.appendChild(row);
+    });
+    return sec;
+  }
+  window.electronAPI.getSysinfo().then(d=>{
+    wrap.innerHTML='';
+    if(!d.ok){ wrap.innerHTML='<div style="color:#ff4444">Error: '+d.error+'<br><br>Run: npm install systeminformation --save</div>'; return; }
+    wrap.appendChild(section('OPERATING SYSTEM',[
+      ['OS', d.os.distro+' '+d.os.release],['Arch',d.os.arch],
+      ['Host',d.os.hostname],['User',d.os.username],['Uptime',fmtUptime(d.os.uptime)],
+    ]));
+    wrap.appendChild(section('CPU',[
+      ['Model',d.cpu.brand],['Vendor',d.cpu.manufacturer],
+      ['Speed',d.cpu.speed+' GHz'],['Cores',d.cpu.physicalCores+' physical / '+d.cpu.cores+' logical'],
+    ]));
+    wrap.appendChild(section('MEMORY',[
+      ['Total',fmtBytes(d.mem.total)],['Used',fmtBytes(d.mem.used)],['Free',fmtBytes(d.mem.free)],
+      ['Usage',Math.round(d.mem.used/d.mem.total*100)+'%'],
+    ]));
+    if(d.gpu&&d.gpu.length) d.gpu.forEach((g,i)=>{
+      wrap.appendChild(section('GPU'+(d.gpu.length>1?' '+(i+1):''),[
+        ['Model',g.model],['Vendor',g.vendor],['VRAM',g.vram?g.vram+' MB':'N/A'],
+      ]));
+    });
+    if(d.displays&&d.displays.length) wrap.appendChild(section('DISPLAY',
+      d.displays.map((d2,i)=>['Screen '+(d.displays.length>1?i+1:''),d2.resolutionX+'x'+d2.resolutionY+(d2.currentRefreshRate?' @ '+d2.currentRefreshRate+'Hz':'')])
+    ));
+    if(d.disks&&d.disks.length) wrap.appendChild(section('STORAGE',
+      d.disks.map(dk=>['Disk',dk.name+' ('+dk.type+') '+fmtBytes(dk.size)])
+    ));
+    if(d.battery&&d.battery.hasBattery) wrap.appendChild(section('BATTERY',[
+      ['Level',d.battery.percent+'%'],['Charging',d.battery.isCharging?'Yes':'No'],
+    ]));
+  }).catch(e=>{ wrap.innerHTML='<div style="color:#ff4444">Error: '+e.message+'<br>Run: npm install systeminformation --save</div>'; });
+}
+
+/* ═══════════════════════
+   PERFORMANCE PANEL
+═══════════════════════ */
+const CPU_HIST=Array(60).fill(0);
+
+function buildPerfPanel(body, reg){
+  const wrap=document.createElement('div');
+  wrap.style.cssText='display:flex;flex-direction:column;height:100%;overflow-y:auto;padding:10px 14px;gap:10px;font:11px/1.5 "Courier New",monospace;color:var(--col);';
+  body.appendChild(wrap);
+  if(!window.electronAPI){ wrap.innerHTML='<div style="opacity:.4">Run inside Electron for live performance data.</div>'; return; }
+
+  function block(title){ const d=document.createElement('div'); d.style.cssText='border:1px solid rgba(0,255,65,.15);padding:8px 12px;border-radius:2px;'; d.innerHTML='<div style="color:#00ccff;font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;">'+title+'</div>'; wrap.appendChild(d); return d; }
+  function barRow(parent,label,pct,sub){ const c=pct>85?'#ff4444':pct>60?'#ffcc00':'var(--col)'; const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin:3px 0;'; row.innerHTML='<div style="width:90px;flex-shrink:0;opacity:.55;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+label+'">'+label+'</div><div style="flex:1;height:10px;background:rgba(0,255,65,.08);border:1px solid rgba(0,255,65,.15);border-radius:1px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:'+c+';transition:width .4s;"></div></div><div style="width:38px;text-align:right;color:'+c+';">'+pct+'%</div>'; parent.appendChild(row); if(sub){ const s=document.createElement('div'); s.style.cssText='opacity:.4;font-size:10px;margin-bottom:4px;'; s.textContent=sub; parent.appendChild(s); } }
+  function fmtSpeed(b){ if(!b||b<=0)return'0 B/s'; const u=['B/s','KB/s','MB/s']; let i=0,n=b; while(n>=1024&&i<2){n/=1024;i++;} return n.toFixed(1)+' '+u[i]; }
+
+  const cpuBlock=block('CPU');
+  const cpuBarWrap=document.createElement('div'); cpuBlock.appendChild(cpuBarWrap);
+  const cpuCanvas=document.createElement('canvas'); cpuCanvas.style.cssText='width:100%;height:55px;display:block;margin-top:6px;'; cpuBlock.appendChild(cpuCanvas);
+  const cpuCores=document.createElement('div'); cpuCores.style.cssText='opacity:.4;font-size:10px;margin-top:4px;'; cpuBlock.appendChild(cpuCores);
+
+  const memBlock=block('MEMORY'); const memBarWrap=document.createElement('div'); memBlock.appendChild(memBarWrap);
+  const memSub=document.createElement('div'); memSub.style.cssText='opacity:.4;font-size:10px;margin-top:2px;'; memBlock.appendChild(memSub);
+
+  const fsBlock=block('STORAGE'); const fsRows=document.createElement('div'); fsBlock.appendChild(fsRows);
+  const netBlock=block('NETWORK'); const netRows=document.createElement('div'); netBlock.appendChild(netRows);
+  const gpuBlock=block('GPU'); const gpuRows=document.createElement('div'); gpuBlock.appendChild(gpuRows);
+
+  function drawGraph(canvas,hist){
+    const dpr=window.devicePixelRatio||1, W=canvas.clientWidth, H=55;
+    canvas.width=W*dpr; canvas.height=H*dpr;
+    const ctx=canvas.getContext('2d'); ctx.scale(dpr,dpr);
+    ctx.clearRect(0,0,W,H);
+    ctx.strokeStyle='rgba(0,255,65,0.08)'; ctx.lineWidth=1;
+    [25,50,75].forEach(y=>{ const py=H-(y/100)*H; ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(W,py); ctx.stroke(); });
+    ctx.beginPath(); hist.forEach((v,i)=>{ const x=(i/59)*W,y=H-(v/100)*H; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+    ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+    ctx.fillStyle='rgba(0,255,65,0.1)'; ctx.fill();
+    ctx.beginPath(); hist.forEach((v,i)=>{ const x=(i/59)*W,y=H-(v/100)*H; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+    ctx.strokeStyle='rgba(0,255,65,0.8)'; ctx.lineWidth=1.5; ctx.stroke();
+  }
+
+  window.electronAPI.onPerfData(d=>{
+    CPU_HIST.push(d.cpu.load); CPU_HIST.shift();
+    cpuBarWrap.innerHTML=''; barRow(cpuBarWrap,'Total',d.cpu.load,'');
+    drawGraph(cpuCanvas,CPU_HIST);
+    if(d.cpu.cores&&d.cpu.cores.length) cpuCores.textContent='Cores: '+d.cpu.cores.map(c=>c+'%').join('  ');
+    const mp=Math.round(d.mem.used/d.mem.total*100);
+    memBarWrap.innerHTML=''; barRow(memBarWrap,'RAM',mp,'');
+    memSub.textContent=fmtBytes(d.mem.used)+' used of '+fmtBytes(d.mem.total);
+    fsRows.innerHTML=''; (d.fs||[]).forEach(f=>{ const p=Math.round(f.use)||0; barRow(fsRows,f.mount,p,fmtBytes(f.used)+' / '+fmtBytes(f.size)); });
+    netRows.innerHTML=''; (d.net||[]).forEach(n=>{ if(!n.iface)return; const r=document.createElement('div'); r.style.cssText='display:flex;gap:12px;margin:2px 0;'; r.innerHTML='<span style="opacity:.5;width:90px;overflow:hidden;text-overflow:ellipsis;">'+n.iface+'</span><span style="color:var(--col)">↓ '+fmtSpeed(n.rx)+'</span><span style="color:#00ccff">↑ '+fmtSpeed(n.tx)+'</span>'; netRows.appendChild(r); });
+    gpuRows.innerHTML='';
+    if(!d.gpu||!d.gpu.length){ gpuRows.innerHTML='<div style="opacity:.35">GPU data unavailable</div>'; }
+    else{ d.gpu.forEach(g=>{ const gu=g.utilizationGpu||0; const sub=g.memoryTotal?g.memoryUsed+'/'+g.memoryTotal+'MB'+(g.temperatureGpu?' · '+g.temperatureGpu+'°C':''):''; barRow(gpuRows,g.model.split(' ').slice(-2).join(' '),gu,sub); }); }
+  });
+
+  window.electronAPI.onPerfError(msg=>{ wrap.innerHTML='<div style="color:#ff4444">Error: '+msg+'</div>'; });
+  window.electronAPI.startPerf();
+}
+
+/* ═══════════════════════
+   DICTIONARY PANELS
+═══════════════════════ */
+function buildDictPanel(body, reg){
+  const wrap=document.createElement('div'); wrap.className='dict-wrap';
+  const bar=document.createElement('div'); bar.className='dict-search-bar';
+  const inp=document.createElement('input'); inp.type='text'; inp.placeholder='Search word...'; inp.spellcheck=false;
+  const btn=document.createElement('button'); btn.className='dict-search-btn'; btn.textContent='Search';
+  bar.appendChild(inp); bar.appendChild(btn); wrap.appendChild(bar);
+  const res=document.createElement('div'); res.className='dict-results';
+  res.innerHTML='<div class="dict-empty">Type a word and press Enter or Search</div>';
+  wrap.appendChild(res); body.appendChild(wrap);
+  async function search(){
+    const q=inp.value.trim(); if(!q)return;
+    res.innerHTML='<div class="dict-loading">Looking up "'+q+'"...</div>';
+    try{
+      const data=await(await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/'+encodeURIComponent(q))).json();
+      if(!Array.isArray(data)||!data.length){res.innerHTML='<div class="dict-empty">No results for "'+q+'"</div>';return;}
+      res.innerHTML='';
+      data.forEach((entry,ei)=>{
+        if(ei>0){const sep=document.createElement('hr');sep.className='dict-separator';res.appendChild(sep);}
+        const word=document.createElement('div');word.className='dict-word';word.textContent=entry.word;res.appendChild(word);
+        const ph=entry.phonetics?.find(p=>p.text)?.text||'';
+        if(ph){const phEl=document.createElement('div');phEl.className='dict-phonetic';phEl.textContent=ph;res.appendChild(phEl);}
+        (entry.meanings||[]).forEach(m=>{
+          const pos=document.createElement('div');pos.className='dict-pos';pos.textContent=m.partOfSpeech;res.appendChild(pos);
+          (m.definitions||[]).slice(0,4).forEach((d,di)=>{
+            const def=document.createElement('div');def.className='dict-def';def.textContent=(di+1)+'. '+d.definition;res.appendChild(def);
+            if(d.example){const ex=document.createElement('div');ex.className='dict-example';ex.textContent='"'+d.example+'"';res.appendChild(ex);}
+          });
+          if(m.synonyms?.length){const sy=document.createElement('div');sy.className='dict-synonyms';sy.textContent='Synonyms: '+m.synonyms.slice(0,6).join(', ');res.appendChild(sy);}
+        });
+      });
+    }catch(e){res.innerHTML='<div class="dict-empty">Error: '+e.message+'</div>';}
+  }
+  btn.onclick=search;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')search();});
+  setTimeout(()=>inp.focus(),100);
+}
+
+function buildJishoPanel(body, reg){
+  const wrap=document.createElement('div'); wrap.className='dict-wrap';
+  const bar=document.createElement('div'); bar.className='dict-search-bar';
+  const inp=document.createElement('input'); inp.type='text'; inp.placeholder='English, Japanese, or romaji...'; inp.spellcheck=false;
+  const btn=document.createElement('button'); btn.className='dict-search-btn'; btn.textContent='Search';
+  bar.appendChild(inp); bar.appendChild(btn); wrap.appendChild(bar);
+  const res=document.createElement('div'); res.className='dict-results';
+  res.innerHTML='<div class="dict-empty">Search in English, Japanese, or romaji</div>';
+  wrap.appendChild(res); body.appendChild(wrap);
+  async function search(){
+    const q=inp.value.trim(); if(!q)return;
+    res.innerHTML='<div class="dict-loading">Searching Jisho for "'+q+'"...</div>';
+    try{
+      const data=await(await fetch('https://jisho.org/api/v1/search/words?keyword='+encodeURIComponent(q))).json();
+      const words=data?.data||[];
+      if(!words.length){res.innerHTML='<div class="dict-empty">No results for "'+q+'"</div>';return;}
+      res.innerHTML='';
+      words.slice(0,8).forEach((entry,ei)=>{
+        if(ei>0){const sep=document.createElement('hr');sep.className='dict-separator';res.appendChild(sep);}
+        const jp=entry.japanese?.[0];
+        const wordEl=document.createElement('div');wordEl.className='jp-word';wordEl.textContent=jp?.word||jp?.reading||'?';res.appendChild(wordEl);
+        if(jp?.reading&&jp?.word){const rdEl=document.createElement('div');rdEl.className='jp-reading';rdEl.textContent=jp.reading;res.appendChild(rdEl);}
+        const tags=[...(entry.jlpt||[]),...(entry.tags||[])];
+        if(entry.is_common)tags.unshift('common');
+        if(tags.length){const tEl=document.createElement('div');tEl.className='jp-tags';tags.forEach(tag=>{const t=document.createElement('span');t.className='jp-tag'+(tag.startsWith('jlpt')||tag==='common'?' jlpt':'');t.textContent=tag.replace('jlpt-','JLPT ').toUpperCase();tEl.appendChild(t);});res.appendChild(tEl);}
+        (entry.senses||[]).slice(0,4).forEach((sense,si)=>{
+          const posEl=document.createElement('div');posEl.className='jp-sense-pos';posEl.textContent=(sense.parts_of_speech||[]).join(', ');res.appendChild(posEl);
+          const sEl=document.createElement('div');sEl.className='jp-sense';sEl.textContent=(si+1)+'. '+(sense.english_definitions||[]).join(', ');res.appendChild(sEl);
+        });
+        if(entry.japanese?.length>1){const alt=document.createElement('div');alt.className='dict-synonyms';alt.textContent='Also: '+entry.japanese.slice(1,4).map(j=>j.word||j.reading).join('、');res.appendChild(alt);}
+      });
+    }catch(e){res.innerHTML='<div class="dict-empty">Error - Jisho may be unreachable: '+e.message+'</div>';}
+  }
+  btn.onclick=search;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')search();});
+  setTimeout(()=>inp.focus(),100);
+}
+
+/* ═══════════════════════
+   BOOT
+═══════════════════════ */
+loadTabs();
+if(tabs.length>0) activeTabId=tabs[tabs.length-1].id;
+
+// restore saved zoom
+applyZoom(currentZoom);
+
+// restore saved font size
+const savedFs=localStorage.getItem('mx_fontsize');
+if(savedFs){ applyFontSize(parseInt(savedFs)); }
+
+updatePrompt();
+setTimeout(()=>print('Matrix Terminal - Electron Edition','li'),100);
+setTimeout(()=>print('Type help for all commands.','ld'),350);
+setTimeout(()=>print('Try: atom bohr  |  split  |  edit  |  panels','ld'),600);
+cmdEl.focus();
+</script>
+</body>
+</html>

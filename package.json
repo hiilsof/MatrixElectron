@@ -1,0 +1,30 @@
+{
+  "name": "matrix-terminal",
+  "version": "1.0.0",
+  "description": "Matrix Terminal — Electron Edition",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start-scr": "electron . --entry screensaver.js",
+    "build": "electron-builder --win --x64",
+    "build-scr": "electron-builder --config electron-builder-scr.json --win --x64"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "systeminformation": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.matrix.terminal",
+    "productName": "Matrix Terminal",
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
